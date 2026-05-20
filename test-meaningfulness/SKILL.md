@@ -9,7 +9,7 @@ description: >
   meaningfulness, or run mutation testing. Also use during PR review or final
   stages of pull request development to verify that new or changed tests are
   actually catching the intended behaviour and are not vacuous.
-allowed-tools: Bash(bash *) Bash(gh *) Bash(patch *) Bash(find *) Bash(sort *) Bash(mkdir *) Bash(git restore *) Bash(git diff *) Bash(tee *) Write
+allowed-tools: Bash(bash *scripts/*) Bash(git restore *) Bash(git diff *) Write
 ---
 
 # Test Meaningfulness (Mutation Testing) Skill
@@ -32,9 +32,11 @@ All scripts are ready to use. **Never `cat` or `Read` script files — just invo
 
 | Purpose | Exact command |
 |---------|---------------|
+| Create all test work dirs | `bash "${CLAUDE_SKILL_DIR}/scripts/init-work-dir.sh" mutation-work <count>` |
 | Start sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-start.sh" /path/to/project` |
 | Stop sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-stop.sh" /path/to/project` |
 | Capture current edit as patch | `bash "${CLAUDE_SKILL_DIR}/scripts/make-patch.sh" mutation-work/test-NNN/mutation.patch` |
+| Run a test command + capture log | `bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" mutation-work/test-NNN/target.log "<cmd>"` |
 | Revert source to last commit | `git restore <mutated-file>` |
 | Build report table | `bash "${CLAUDE_SKILL_DIR}/scripts/build-report.sh" mutation-work` |
 
@@ -121,20 +123,19 @@ For other frameworks, skip this step.
 
 Run the full test suite command. If any test is already failing, stop and tell the user — the baseline must be clean.
 
-Create the work directory:
-```bash
-mkdir -p mutation-work
-```
-
 ---
 
 ## Step 4 — Enumerate tests
 
 Run the test discovery command to get the list of individual test IDs:
-- pytest: `pytest <subset> --collect-only -q 2>/dev/null`
-- sbt/ScalaTest: `sbt -client "testOnly <ClassName> -- -t *"` or read the spec source
+- pytest: `bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" /dev/null "pytest <subset> --collect-only -q 2>/dev/null"`
+- sbt/ScalaTest: read the spec source file directly to list test names
 
-Parse the output into a numbered list. Show the user the list and count before proceeding.
+Parse the output into a numbered list. Show the user the list and count, then initialise the work directory:
+
+```bash
+bash "${CLAUDE_SKILL_DIR}/scripts/init-work-dir.sh" mutation-work <count>
+```
 
 ---
 
@@ -144,10 +145,7 @@ Work through each test in order, numbered `001`, `002`, …
 
 ### Setup (per test)
 
-```bash
-mkdir -p "mutation-work/test-001"   # use the actual zero-padded number
-```
-Then use the Write tool to create `mutation-work/test-001/name.txt` containing the full test identifier.
+Use the Write tool to create `mutation-work/test-NNN/name.txt` containing the full test identifier. (Directories were already created by `init-work-dir.sh`.)
 
 ### 5a. Understand the test
 
@@ -175,14 +173,14 @@ bash "${CLAUDE_SKILL_DIR}/scripts/make-patch.sh" "mutation-work/test-${N}/mutati
 
 **3. Run target**:
 ```bash
-<run-one-cmd> > "mutation-work/test-${N}/target.log" 2>&1; echo $?
+bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" "mutation-work/test-NNN/target.log" "<run-one-cmd>"
 ```
-- Non-zero exit (test failed) → proceed to step 4.
-- Zero exit (test passed) → mutation missed. **Revert** and generate a new mutation.
+- `exit_code=1` (test failed) → proceed to step 4.
+- `exit_code=0` (test passed) → mutation missed. **Revert** and generate a new mutation.
 
 **4. Run suite**:
 ```bash
-<run-all-cmd> > "mutation-work/test-${N}/suite.log" 2>&1; echo $?
+bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" "mutation-work/test-NNN/suite.log" "<run-all-cmd>"
 ```
 Read `suite.log` to identify which tests failed:
 - Only the target test/suite failed → **success**. Go to "On success" below.
@@ -195,7 +193,7 @@ git restore <mutated-file>
 
 After reverting, verify the target test passes before moving on:
 ```bash
-<run-one-cmd> > /dev/null 2>&1; echo $?   # must be 0
+bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" /dev/null "<run-one-cmd>"   # must print exit_code=0
 ```
 
 ### On success
