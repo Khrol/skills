@@ -110,10 +110,16 @@ If no targeted mutation was found in 5 attempts, revert any applied changes, the
 - This is not a problem — it's intentional design. The target test documents the baseline contract.
 - Record which sibling tests share the path (e.g., "BASELINE — shared path with tests 2, 3, 4").
 
+**COUPLED** — assign this label when there IS a stable group of co-failing tests but the one-way check fails (the sibling cannot be broken without also breaking the target test). This means the tests are bidirectionally entangled over the same code path — no test in the group can be isolated:
+- Every mutation that breaks the target also breaks the siblings.
+- Attempting to break a sibling also breaks the target.
+- Unlike BASELINE, there is no clean hierarchy: no test in the group is "more minimal" than the others.
+- This is a code smell — tests that cannot be decoupled indicate the code itself lacks separation of concerns, or the tests are redundant.
+- Record the full group (e.g., "COUPLED — entangled with tests 8, 9: neither can be broken in isolation").
+
 **SUSPECT** — assign this label when:
 - The target test **never fails** regardless of mutation (assertion is vacuous, or the test doesn't call the mutated code).
 - Collateral failures are inconsistent across attempts — no stable sibling group.
-- The one-way check above shows the target test fails whenever a sibling fails (circular coupling, not a clean baseline relationship).
 - The test only checks that no exception is raised with no value assertion.
 
 **Always revert mutations before moving to the next test.** Verify revert by re-running the target test and confirming it passes.
@@ -130,10 +136,11 @@ After processing all tests, produce:
 | `test_foo` | `- return True`<br>`+ return False` in `auth.py:42` | Only `test_foo` failed ✓ |
 | `test_bar` | `- if x > 0`<br>`+ if x >= 0` in `parser.py:17` | Only `test_bar` failed ✓ |
 | `test_minimal` | BASELINE — shared path with `test_edge1`, `test_edge2`: any mutation to the shared chain fails all three; each sibling can be broken independently | — |
+| `test_eight` | COUPLED — entangled with `test_nine`: neither can be broken without failing the other; no separation of concerns | — |
 | `test_baz` | SUSPECT — no targeted mutation found in 5 attempts | — |
 ```
 
-2. **File output**: Write the same table (plus a summary header with date, test command, and counts of meaningful/baseline/suspect tests) to `mutation-report.md` in the current working directory.
+2. **File output**: Write the same table (plus a summary header with date, test command, and counts of meaningful/baseline/coupled/suspect tests) to `mutation-report.md` in the current working directory.
 
 ## Rules and constraints
 
