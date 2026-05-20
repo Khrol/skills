@@ -9,7 +9,7 @@ description: >
   meaningfulness, or run mutation testing. Also use during PR review or final
   stages of pull request development to verify that new or changed tests are
   actually catching the intended behaviour and are not vacuous.
-allowed-tools: Bash(bash *) Bash(gh *) Bash(patch *) Bash(find *) Bash(sort *)
+allowed-tools: Bash(bash *) Bash(gh *) Bash(patch *) Bash(find *) Bash(sort *) Bash(mkdir *) Bash(git restore *) Bash(git diff *) Bash(tee *) Write
 ---
 
 # Test Meaningfulness (Mutation Testing) Skill
@@ -145,10 +145,9 @@ Work through each test in order, numbered `001`, `002`, …
 ### Setup (per test)
 
 ```bash
-N=001  # zero-padded number
-mkdir -p "mutation-work/test-${N}"
-echo "<test-id>" > "mutation-work/test-${N}/name.txt"
+mkdir -p "mutation-work/test-001"   # use the actual zero-padded number
 ```
+Then use the Write tool to create `mutation-work/test-001/name.txt` containing the full test identifier.
 
 ### 5a. Understand the test
 
@@ -201,11 +200,9 @@ After reverting, verify the target test passes before moving on:
 
 ### On success
 
-```bash
-echo "OK" > "mutation-work/test-${N}/outcome.txt"
-# Write mutation-desc.txt: e.g. '`- x > 0`<br>`+ x >= 0` in `Parser.scala:42`'
-echo '<desc>' > "mutation-work/test-${N}/mutation-desc.txt"
-```
+Use the Write tool to create:
+- `mutation-work/test-NNN/outcome.txt` — content: `OK`
+- `mutation-work/test-NNN/mutation-desc.txt` — one-line markdown, e.g. `` `- x > 0`<br>`+ x >= 0` in `Parser.scala:42` ``
 
 ### 5f. After 5 failed attempts — diagnose
 
@@ -215,26 +212,23 @@ Revert any applied changes. Then check directionality:
 
 **BASELINE** — sibling CAN be broken without breaking the target (one-way dependency). Normal healthy pattern: target covers the minimal path; siblings extend it.
 
-```bash
-echo "BASELINE" > "mutation-work/test-${N}/outcome.txt"
-echo "<sibling-numbers>" > "mutation-work/test-${N}/siblings.txt"
-echo "shared path with test-<M>, test-<K>: siblings can each be broken individually" > "mutation-work/test-${N}/mutation-desc.txt"
-```
+Use the Write tool to create:
+- `mutation-work/test-NNN/outcome.txt` — `BASELINE`
+- `mutation-work/test-NNN/siblings.txt` — space-separated peer test numbers, e.g. `002 005`
+- `mutation-work/test-NNN/mutation-desc.txt` — e.g. `shared path with test-002, test-005: siblings can each be broken individually`
 
 **COUPLED** — sibling CANNOT be broken without also breaking the target (bidirectional entanglement). Code smell.
 
-```bash
-echo "COUPLED" > "mutation-work/test-${N}/outcome.txt"
-echo "<sibling-numbers>" > "mutation-work/test-${N}/siblings.txt"
-echo "entangled with test-<M>: neither can be broken without failing the other" > "mutation-work/test-${N}/mutation-desc.txt"
-```
+Use the Write tool to create:
+- `mutation-work/test-NNN/outcome.txt` — `COUPLED`
+- `mutation-work/test-NNN/siblings.txt` — space-separated peer test numbers
+- `mutation-work/test-NNN/mutation-desc.txt` — e.g. `entangled with test-002: neither can be broken without failing the other`
 
 **SUSPECT** — target never fails regardless of mutation, or no stable co-failure group.
 
-```bash
-echo "SUSPECT" > "mutation-work/test-${N}/outcome.txt"
-echo "no targeted mutation found in 5 attempts" > "mutation-work/test-${N}/mutation-desc.txt"
-```
+Use the Write tool to create:
+- `mutation-work/test-NNN/outcome.txt` — `SUSPECT`
+- `mutation-work/test-NNN/mutation-desc.txt` — `no targeted mutation found in 5 attempts`
 
 ---
 
