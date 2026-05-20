@@ -7,31 +7,41 @@ description: >
   tests, diffs, and execution results. Mark tests where no targeted mutation can be
   found as 'suspect'. Use when the user asks to evaluate test quality, test
   meaningfulness, or run mutation testing.
+allowed-tools: Bash(bash *) Bash(gh *)
 ---
 
 # Test Meaningfulness (Mutation Testing) Skill
 
 You evaluate how meaningful a test suite is by attempting targeted mutation testing: for each test, find a minimal source code change that causes **exactly that one test** to fail while all others remain green.
 
+## PR context (auto-injected)
+
+```!
+bash "${CLAUDE_SKILL_DIR}/scripts/detect-pr.sh"
+```
+
 ## Step 1 — Detect context and collect test suite info
 
 ### PR context detection (do this first)
 
-Run `git rev-parse --abbrev-ref HEAD` to get the current branch. Then run `git diff --name-only $(git merge-base HEAD origin/HEAD 2>/dev/null || git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD origin/master 2>/dev/null) HEAD` to list files changed in the current branch relative to the base branch.
+Read the **PR context** block above (injected by the script at skill load time).
 
-**If changed files are found (PR context)**:
+**If it starts with `PR_DETECTED`**: you are in a PR context. Extract:
+- PR number, title, URL, head branch, base branch.
+- The list of changed files under `changed_files:`.
 
-1. **Identify affected source files**: from the diff, collect all changed non-test source files.
+Then:
+1. **Identify affected source files**: from the changed file list, collect all non-test source files.
 2. **Identify affected test files**: collect any changed test files directly, plus scan for test files that import or reference the changed source files (`grep -rl` the module/class names across the test directories).
 3. **Infer the test runner and commands** from the project structure:
    - `pytest.ini` / `pyproject.toml` / `setup.cfg` with `[tool:pytest]` → pytest. Run-all: `pytest <test-files> --tb=no -q`. Run-one: `pytest <file>::<TestClass>::<test_method> --tb=short -q`.
    - `package.json` with `jest` or `vitest` → Jest/Vitest. Run-all: `npx jest <pattern> --no-coverage`. Run-one: `npx jest --testNamePattern="<name>" <file>`.
    - `build.gradle` / `pom.xml` → JUnit. Infer the right `./gradlew test` or `mvn test -Dtest=<Class>#<method>` pattern.
    - Fall back to reading any `Makefile`, `README`, or CI config (`.github/workflows/`, `Jenkinsfile`) for the actual test command used in CI.
-4. **Show a brief confirmation** — one message listing: the base branch, changed source files, affected test files, inferred run commands, and estimated test count. Then proceed immediately without waiting for approval.
+4. **Show a brief confirmation** — one message: PR number + title, changed source files, affected test files, inferred run commands, estimated test count. Proceed immediately.
 5. Skip the rest of Step 1 and go directly to Step 2.
 
-**If no changed files are found (not a PR context)**, fall through to the manual interview below.
+**If it starts with `NO_PR`**: fall through to the manual interview below.
 
 ### Manual interview (non-PR context only)
 
