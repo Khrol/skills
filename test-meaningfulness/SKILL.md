@@ -6,13 +6,17 @@ description: >
   exactly that test to fail while all other tests pass. Reports a table with
   tests, diffs, and execution results. Mark tests where no targeted mutation can be
   found as 'suspect'. Use when the user asks to evaluate test quality, test
-  meaningfulness, or run mutation testing.
+  meaningfulness, or run mutation testing. Also use during PR review or final
+  stages of pull request development to verify that new or changed tests are
+  actually catching the intended behaviour and are not vacuous.
 allowed-tools: Bash(bash *) Bash(gh *)
 ---
 
 # Test Meaningfulness (Mutation Testing) Skill
 
 You evaluate how meaningful a test suite is by attempting targeted mutation testing: for each test, find a minimal source code change that causes **exactly that one test** to fail while all others remain green.
+
+> **References**: [sbt usage instructions](references/sbt-instructions.md)
 
 ## PR context (auto-injected)
 
