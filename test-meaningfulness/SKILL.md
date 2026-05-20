@@ -9,7 +9,7 @@ description: >
   meaningfulness, or run mutation testing. Also use during PR review or final
   stages of pull request development to verify that new or changed tests are
   actually catching the intended behaviour and are not vacuous.
-allowed-tools: Bash(bash *) Bash(gh *)
+allowed-tools: Bash(bash *) Bash(gh *) Bash(patch *) Bash(find *) Bash(sort *)
 ---
 
 # Test Meaningfulness (Mutation Testing) Skill
@@ -23,6 +23,37 @@ You evaluate how meaningful a test suite is by attempting targeted mutation test
 ```!
 bash "${CLAUDE_SKILL_DIR}/scripts/detect-pr.sh"
 ```
+
+---
+
+## Work directory layout
+
+All intermediate and final artifacts go under `mutation-work/` in the project root. Create it at the start; never delete it mid-run.
+
+```
+mutation-work/
+  test-001/
+    name.txt             # full test identifier (one line)
+    mutation.patch       # unified diff applied during the successful attempt
+    mutation-desc.txt    # one-line markdown for the Mutation column of the report
+    target.log           # stdout+stderr of the run-one command
+    suite.log            # stdout+stderr of the run-all command
+    outcome.txt          # OK | BASELINE | COUPLED | SUSPECT
+    siblings.txt         # (BASELINE/COUPLED only) space-separated peer test numbers
+  test-002/
+    ...
+```
+
+**You write**: `name.txt`, `mutation.patch`, `mutation-desc.txt`, `outcome.txt`, `siblings.txt`.
+**Scripts write**: `target.log`, `suite.log` (via redirected test runner output).
+
+`mutation-desc.txt` format:
+- OK: `` `- old line`<br>`+ new line` in `File.scala:42` ``
+- BASELINE: `shared path with test-003, test-007: siblings can each be broken individually`
+- COUPLED: `entangled with test-003: neither can be broken without failing the other`
+- SUSPECT: `no targeted mutation found in 5 attempts`
+
+---
 
 ## Step 1 — Detect context and collect test suite info
 
@@ -40,7 +71,7 @@ Then:
 3. **Infer the test runner and commands** from the project structure:
    - `pytest.ini` / `pyproject.toml` / `setup.cfg` with `[tool:pytest]` → pytest. Run-all: `pytest <test-files> --tb=no -q`. Run-one: `pytest <file>::<TestClass>::<test_method> --tb=short -q`.
    - `package.json` with `jest` or `vitest` → Jest/Vitest. Run-all: `npx jest <pattern> --no-coverage`. Run-one: `npx jest --testNamePattern="<name>" <file>`.
-   - `build.gradle` / `pom.xml` → JUnit. Infer the right `./gradlew test` or `mvn test -Dtest=<Class>#<method>` pattern.
+   - `build.gradle` / `pom.xml` / `build.sbt` → JUnit/ScalaTest. Infer the right test command. For sbt: run-all `sbt -client test`, run-one `sbt -client "testOnly <ClassName>"`.
    - Fall back to reading any `Makefile`, `README`, or CI config (`.github/workflows/`, `Jenkinsfile`) for the actual test command used in CI.
 4. **Show a brief confirmation** — one message: PR number + title, changed source files, affected test files, inferred run commands, estimated test count. Proceed immediately.
 5. Skip the rest of Step 1 and go directly to Step 2.
@@ -51,148 +82,212 @@ Then:
 
 Ask the user (via AskUserQuestion) for the following before doing anything else:
 
-1. **Test subset**: Which test files or test cases to evaluate (e.g. `tests/test_auth.py`, or a glob). Remind the user the suite should be small enough to run dozens of times within a reasonable time frame.
-2. **Run-all command**: The command to run the full test subset (e.g. `pytest tests/test_auth.py -x --tb=no -q`).
-3. **Run-one command template**: The command to run a single test by name (e.g. `pytest tests/test_auth.py::TestLogin::test_success -x --tb=short -q`). Note the pattern so you can substitute test names later.
-4. **Source root**: Where the source code being tested lives (e.g. `src/`, `lib/`, `.`). This is needed to locate files to mutate.
+1. **Test subset**: Which test files or test cases to evaluate. Remind the user the suite should be small enough to run dozens of times.
+2. **Run-all command**: The command to run the full test subset (e.g. `sbt -client test`).
+3. **Run-one command template**: The command to run a single test by name (e.g. `sbt -client "testOnly %CLASS%"`). Note the substitution pattern.
+4. **Source root**: Where the source code being tested lives.
 
-If the user supplies some of this info upfront in their message, infer what you can and only ask for what's missing.
+---
 
-## Step 2 — Baseline: verify the suite is green
+## Step 2 — Start sbt server (sbt projects only)
 
-Run the full test suite command. If any test is already failing, stop and tell the user — the baseline must be clean before mutation testing makes sense.
+For sbt projects, start the persistent server before any test runs:
 
-## Step 3 — Enumerate tests
+```bash
+bash "${CLAUDE_SKILL_DIR}/scripts/sbt-start.sh" /path/to/project
+```
 
-Run the test discovery command to get the list of individual test IDs. For pytest: `pytest <subset> --collect-only -q 2>/dev/null`. For Jest: `jest --listTests`. Parse the output into a list of individual test identifiers. Show the user the list and count before proceeding.
+For other frameworks, skip this step.
 
-## Step 4 — For each test, find a targeted mutation
+---
 
-Work through each test one at a time. For each test:
+## Step 3 — Baseline: verify the suite is green
 
-### 4a. Understand the test
+Run the full test suite command. If any test is already failing, stop and tell the user — the baseline must be clean.
 
-Read the test code. Identify:
-- What function/method/behavior it exercises.
-- What assertion it makes.
-- Which source file(s) it imports from.
+Create the work directory:
+```bash
+mkdir -p mutation-work
+```
 
-As you read each source file, maintain a running **coverage map**: for each source file, record which functions, methods, branches, and meaningful code paths are exercised by at least one test. You will use this at the end to identify gaps.
+---
 
-### 4b. Generate a mutation (AI-driven, up to 5 attempts)
+## Step 4 — Enumerate tests
 
-Read the relevant source file. Reason about what minimal change would break the specific assertion this test makes **without touching any logic that other tests depend on exclusively**. Good mutations:
+Run the test discovery command to get the list of individual test IDs:
+- pytest: `pytest <subset> --collect-only -q 2>/dev/null`
+- sbt/ScalaTest: `sbt -client "testOnly <ClassName> -- -t *"` or read the spec source
+
+Parse the output into a numbered list. Show the user the list and count before proceeding.
+
+---
+
+## Step 5 — For each test, find a targeted mutation
+
+Work through each test in order, numbered `001`, `002`, …
+
+### Setup (per test)
+
+```bash
+N=001  # zero-padded number
+mkdir -p "mutation-work/test-${N}"
+echo "<test-id>" > "mutation-work/test-${N}/name.txt"
+```
+
+### 5a. Understand the test
+
+Read the test code. Identify what function/method it exercises and what assertion it makes. As you read each source file, maintain a running **coverage map** for Step 6.
+
+### 5b–5e. Generate and trial the mutation (up to 5 attempts)
+
+**Generate** a mutation. Good mutations:
 - Flip a comparison (`>` → `>=`, `==` → `!=`)
-- Change a return value constant (`return True` → `return False`, `return 0` → `return 1`)
+- Change a return value constant (`return True` → `return False`)
 - Negate a condition (`if x` → `if not x`)
-- Remove a single side-effect statement (e.g. remove an append or assignment)
+- Remove a single side-effect statement
 - Change an arithmetic operator (`+` → `-`)
 
-Bad mutations:
-- Deleting whole functions, changing function signatures, modifying shared state used by many tests.
-- **Input-specific special-casing** — do NOT add conditionals that check for the exact input values used in the target test (e.g., `if x == "foo": return wrong_result`). This is cheating: it manufactures a failure for one test by hardcoding its data rather than finding a real structural flaw. A valid mutation must change the general logic of the function, not add a guard that only triggers on one test's specific inputs.
+Bad mutations (forbidden):
+- Deleting whole functions or changing signatures.
+- **Input-specific special-casing** — do NOT add `if x == <test-input>: return wrong`. A valid mutation changes general logic, not a guard that only triggers on one test's data.
 
-### 4c. Apply the mutation
+**Write the patch** to `mutation-work/test-${N}/mutation.patch` as a unified diff.
 
-Use the Edit tool to apply the change to the source file. Keep track of what you changed so you can revert it precisely.
+**Apply**:
+```bash
+bash "${CLAUDE_SKILL_DIR}/scripts/apply-patch.sh" "mutation-work/test-${N}/mutation.patch"
+```
 
-### 4d. Run the target test
+**Run target**:
+```bash
+<run-one-cmd> > "mutation-work/test-${N}/target.log" 2>&1; echo $?
+```
+- Non-zero exit (test failed) → proceed to run suite.
+- Zero exit (test passed) → mutation missed. **Revert** and generate a new mutation.
 
-Run the single-test command for this test. If it **does not fail**: this mutation doesn't target this test. Revert immediately and generate a new mutation (go to 4b). Count this as attempt N.
+**Run suite**:
+```bash
+<run-all-cmd> > "mutation-work/test-${N}/suite.log" 2>&1; echo $?
+```
+Read `suite.log` to identify which tests failed:
+- Only the target test/suite failed → **success**. Go to "On success" below.
+- Other tests also failed → mutation too broad. **Revert** and generate a narrower mutation.
 
-### 4e. Run the full suite
+**Revert** (always after each attempt, whether success or failure):
+```bash
+bash "${CLAUDE_SKILL_DIR}/scripts/revert-patch.sh" "mutation-work/test-${N}/mutation.patch"
+```
 
-If the target test failed: run the full suite command. Check the output:
-- If **only the target test fails**: success. Record the diff and the result summary. Revert the mutation and move to the next test.
-- If **other tests also fail**: this mutation is too broad. Revert immediately and generate a narrower mutation (go to 4b). Count this as attempt N.
+After reverting, verify the target test passes before moving on:
+```bash
+<run-one-cmd> > /dev/null 2>&1; echo $?   # must be 0
+```
 
-### 4f. After 5 failed attempts
+### On success
 
-If no targeted mutation was found in 5 attempts, revert any applied changes, then **diagnose why** before assigning a label.
+```bash
+echo "OK" > "mutation-work/test-${N}/outcome.txt"
+# Write mutation-desc.txt: e.g. '`- x > 0`<br>`+ x >= 0` in `Parser.scala:42`'
+echo '<desc>' > "mutation-work/test-${N}/mutation-desc.txt"
+```
 
-#### Diagnose: BASELINE vs SUSPECT
+### 5f. After 5 failed attempts — diagnose
 
-**Check the directionality of co-failures.** When every mutation that breaks the target test also breaks a consistent set of sibling tests, verify whether the relationship is one-way:
+Revert any applied changes. Then check directionality:
 
-- Pick one of the consistently co-failing sibling tests.
-- Apply a mutation specifically targeting that sibling (not the target test).
-- Run the full suite: does the sibling fail while the **target test stays green**?
+**Pick one consistently co-failing sibling test. Apply a mutation targeting that sibling. Run the full suite: does the sibling fail while the target stays green?**
 
-**BASELINE** — assign this label when the sibling CAN be broken without breaking the target test (one-way dependency). This is the normal and healthy **minimal-path + edge-cases pattern**:
-- The target test covers the minimal/happy-path behavior.
-- The sibling tests extend that path with additional inputs or complexity.
-- Any mutation to the shared code path breaks the target AND the siblings, because the siblings depend on the minimal path too.
-- But the siblings can be broken individually (e.g., by targeting the extra logic unique to each).
-- This is not a problem — it's intentional design. The target test documents the baseline contract.
-- In the Result column write **BASELINE**; in the Mutation column describe which sibling tests share the path using their row numbers (e.g., "shared path with `test_edge1` (#2), `test_edge2` (#3): …").
+**BASELINE** — sibling CAN be broken without breaking the target (one-way dependency). Normal healthy pattern: target covers the minimal path; siblings extend it.
 
-**COUPLED** — assign this label when there IS a stable group of co-failing tests but the one-way check fails (the sibling cannot be broken without also breaking the target test). This means the tests are bidirectionally entangled over the same code path — no test in the group can be isolated:
-- Every mutation that breaks the target also breaks the siblings.
-- Attempting to break a sibling also breaks the target.
-- Unlike BASELINE, there is no clean hierarchy: no test in the group is "more minimal" than the others.
-- This is a code smell — tests that cannot be decoupled indicate the code itself lacks separation of concerns, or the tests are redundant.
-- In the Result column write **COUPLED**; in the Mutation column describe the entangled group using row numbers (e.g., "entangled with `test_nine` (#9): neither can be broken in isolation").
+```bash
+echo "BASELINE" > "mutation-work/test-${N}/outcome.txt"
+echo "<sibling-numbers>" > "mutation-work/test-${N}/siblings.txt"
+echo "shared path with test-<M>, test-<K>: siblings can each be broken individually" > "mutation-work/test-${N}/mutation-desc.txt"
+```
 
-**SUSPECT** — assign this label when:
-- The target test **never fails** regardless of mutation (assertion is vacuous, or the test doesn't call the mutated code).
-- Collateral failures are inconsistent across attempts — no stable sibling group.
-- The test only checks that no exception is raised with no value assertion.
+**COUPLED** — sibling CANNOT be broken without also breaking the target (bidirectional entanglement). Code smell.
 
-**Always revert mutations before moving to the next test.** Verify revert by re-running the target test and confirming it passes.
+```bash
+echo "COUPLED" > "mutation-work/test-${N}/outcome.txt"
+echo "<sibling-numbers>" > "mutation-work/test-${N}/siblings.txt"
+echo "entangled with test-<M>: neither can be broken without failing the other" > "mutation-work/test-${N}/mutation-desc.txt"
+```
 
-## Step 5 — Identify untested areas
+**SUSPECT** — target never fails regardless of mutation, or no stable co-failure group.
 
-After processing all tests, re-read each source file that appeared in the coverage map. Walk through every function, method, branch condition, and meaningful code path and check whether it was exercised by at least one test in the suite.
+```bash
+echo "SUSPECT" > "mutation-work/test-${N}/outcome.txt"
+echo "no targeted mutation found in 5 attempts" > "mutation-work/test-${N}/mutation-desc.txt"
+```
+
+---
+
+## Step 6 — Identify untested areas
+
+After processing all tests, re-read each source file in the coverage map. Walk through every function, method, branch condition, and meaningful code path and check whether it was exercised.
 
 Flag as untested:
 - **Functions/methods** with no test calling them at all.
-- **Branches** within tested functions that no test reaches (e.g., the `else` arm of a condition, an early-return guard, an exception handler, a loop that runs zero times).
-- **Code paths** that are only reachable with specific input conditions no test provides (e.g., empty input, `None`, negative numbers, maximum values).
+- **Branches** no test reaches (else arm, early-return guard, exception handler).
+- **Input conditions** no test provides (empty input, `None`, negative numbers).
 
-Do not flag:
-- Private helpers that are only called by already-tested functions and whose behavior is verified indirectly through those tests.
-- Dead code that is structurally unreachable (note it separately if you spot it).
+Do not flag: private helpers verified indirectly, or structurally dead code (note dead code separately).
 
-## Step 6 — Build the report
+---
 
-After processing all tests, produce:
+## Step 7 — Build the report
 
-1. **Inline markdown table** in the conversation:
+### Mutation table (inline + file)
 
-```
-| # | Test | Mutation (diff) | Result |
-|---|------|----------------|--------|
-| 1 | `test_foo` | `- return True`<br>`+ return False` in `auth.py:42` | Only `test_foo` failed ✓ |
-| 2 | `test_bar` | `- if x > 0`<br>`+ if x >= 0` in `parser.py:17` | Only `test_bar` failed ✓ |
-| 3 | `test_minimal` | shared path with `test_edge1` (#4), `test_edge2` (#5): any mutation to the shared chain fails all three; each sibling can be broken independently | BASELINE |
-| 4 | `test_eight` | entangled with `test_nine` (#5): neither can be broken without failing the other; no separation of concerns | COUPLED |
-| 5 | `test_baz` | no targeted mutation found in 5 attempts | SUSPECT |
+Run the report builder and save to file:
+
+```bash
+bash "${CLAUDE_SKILL_DIR}/scripts/build-report.sh" mutation-work | tee mutation-report.md
 ```
 
-2. **Untested areas summary** — after the table, add a short section with the **top 5 most important gaps** only. Prioritise: uncalled functions > untested error/edge branches > unreached conditions. Example:
+Display the table inline in the conversation.
+
+### Untested areas summary (inline)
+
+After the table, show the **top 5 most important gaps** inline, prioritised: uncalled functions > untested error/edge branches > unreached conditions.
 
 ```
 ## Untested Areas (top 5)
 
 | # | Location | What is not tested |
 |---|----------|--------------------|
-| 1 | `auth.py:58` `verify_token()` | Function is never called by any test |
-| 2 | `parser.py:23` `else` branch | No test passes an empty string |
-| 3 | `utils.py:10` `camel_to_snake()` — `None` input | Guard at line 12 never exercised |
+| 1 | `Auth.scala:58` `verifyToken()` | Never called by any test |
+| 2 | `Parser.scala:23` `else` branch | No test passes an empty string |
 ```
 
-If no gaps are found, write: "All functions and branches in the evaluated source files are exercised by at least one test."
+If no gaps, write: "All functions and branches in the evaluated source files are exercised by at least one test."
 
-3. **File output**: Write two files to the current working directory:
-   - `mutation-report.md` — the mutation table plus a summary header (date, test command, counts of meaningful/baseline/coupled/suspect tests, total untested gap count).
-   - `untested-areas.md` — the **full** untested areas table with every gap found, not just the top 5.
+### Full untested areas (file)
+
+Write every gap to `untested-areas.md` (not just the top 5).
+
+### Summary header in mutation-report.md
+
+Prepend to `mutation-report.md`:
+- Date, test command
+- Counts: meaningful (OK) / BASELINE / COUPLED / SUSPECT
+- Total untested gap count (link to `untested-areas.md`)
+
+---
+
+## Step 8 — Stop sbt server (sbt projects only)
+
+```bash
+bash "${CLAUDE_SKILL_DIR}/scripts/sbt-stop.sh" /path/to/project
+```
+
+---
 
 ## Rules and constraints
 
-- **Always revert mutations** before moving to the next test. Never leave the source in a mutated state.
-- **Restore immediately on any error** (test runner crash, unexpected output). Use the Edit tool with the original string to revert.
+- **Always revert mutations** before moving to the next test. Never leave source in a mutated state.
+- **Restore immediately on any error** (test runner crash, unexpected output).
 - **Do not modify test files** — only mutate source/production code.
-- **Do not mutate the same line for different tests** if those tests share that code path — instead find a mutation specific to each test's unique path.
-- If the test suite takes more than 60 seconds per run, warn the user before starting — the full process may be very slow.
-- After every revert, run the single-test command one more time to confirm the test is green again before moving on.
-- Show progress as you go: announce which test you're working on and which attempt number you're on.
+- **Do not mutate the same line for different tests** if those tests share that code path.
+- If the test suite takes more than 60 seconds per run, warn the user before starting.
+- Show progress as you go: announce which test and which attempt number you are on.
