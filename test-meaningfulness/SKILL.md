@@ -34,11 +34,11 @@ All scripts are ready to use. **Never `cat` or `Read` script files — just invo
 |---------|---------------|
 | Start sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-start.sh" /path/to/project` |
 | Stop sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-stop.sh" /path/to/project` |
-| Apply a patch | `bash "${CLAUDE_SKILL_DIR}/scripts/apply-patch.sh" mutation-work/test-NNN/mutation.patch` |
-| Revert a patch | `bash "${CLAUDE_SKILL_DIR}/scripts/revert-patch.sh" mutation-work/test-NNN/mutation.patch` |
+| Capture current edit as patch | `bash "${CLAUDE_SKILL_DIR}/scripts/make-patch.sh" mutation-work/test-NNN/mutation.patch` |
+| Revert source to last commit | `git restore <mutated-file>` |
 | Build report table | `bash "${CLAUDE_SKILL_DIR}/scripts/build-report.sh" mutation-work` |
 
-All patch scripts must be run **from the project root** (the directory containing `build.sbt` / `setup.py` / etc.).
+All scripts must be run **from the project root** (the directory containing `build.sbt` / `setup.py` / etc.).
 
 ---
 
@@ -167,21 +167,21 @@ Bad mutations (forbidden):
 - Deleting whole functions or changing signatures.
 - **Input-specific special-casing** — do NOT add `if x == <test-input>: return wrong`. A valid mutation changes general logic, not a guard that only triggers on one test's data.
 
-**Write the patch** to `mutation-work/test-${N}/mutation.patch` as a unified diff.
+**1. Edit** the source file using the Edit tool to apply the mutation.
 
-**Apply**:
+**2. Capture the patch** (from the git diff of the edit):
 ```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/apply-patch.sh" "mutation-work/test-${N}/mutation.patch"
+bash "${CLAUDE_SKILL_DIR}/scripts/make-patch.sh" "mutation-work/test-${N}/mutation.patch"
 ```
 
-**Run target**:
+**3. Run target**:
 ```bash
 <run-one-cmd> > "mutation-work/test-${N}/target.log" 2>&1; echo $?
 ```
-- Non-zero exit (test failed) → proceed to run suite.
+- Non-zero exit (test failed) → proceed to step 4.
 - Zero exit (test passed) → mutation missed. **Revert** and generate a new mutation.
 
-**Run suite**:
+**4. Run suite**:
 ```bash
 <run-all-cmd> > "mutation-work/test-${N}/suite.log" 2>&1; echo $?
 ```
@@ -191,7 +191,7 @@ Read `suite.log` to identify which tests failed:
 
 **Revert** (always after each attempt, whether success or failure):
 ```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/revert-patch.sh" "mutation-work/test-${N}/mutation.patch"
+git restore <mutated-file>
 ```
 
 After reverting, verify the target test passes before moving on:
