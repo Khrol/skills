@@ -124,14 +124,14 @@ If no targeted mutation was found in 5 attempts, revert any applied changes, the
 - Any mutation to the shared code path breaks the target AND the siblings, because the siblings depend on the minimal path too.
 - But the siblings can be broken individually (e.g., by targeting the extra logic unique to each).
 - This is not a problem — it's intentional design. The target test documents the baseline contract.
-- Record which sibling tests share the path (e.g., "BASELINE — shared path with tests 2, 3, 4").
+- In the Result column write **BASELINE**; in the Mutation column describe which sibling tests share the path using their row numbers (e.g., "shared path with `test_edge1` (#2), `test_edge2` (#3): …").
 
 **COUPLED** — assign this label when there IS a stable group of co-failing tests but the one-way check fails (the sibling cannot be broken without also breaking the target test). This means the tests are bidirectionally entangled over the same code path — no test in the group can be isolated:
 - Every mutation that breaks the target also breaks the siblings.
 - Attempting to break a sibling also breaks the target.
 - Unlike BASELINE, there is no clean hierarchy: no test in the group is "more minimal" than the others.
 - This is a code smell — tests that cannot be decoupled indicate the code itself lacks separation of concerns, or the tests are redundant.
-- Record the full group (e.g., "COUPLED — entangled with tests 8, 9: neither can be broken in isolation").
+- In the Result column write **COUPLED**; in the Mutation column describe the entangled group using row numbers (e.g., "entangled with `test_nine` (#9): neither can be broken in isolation").
 
 **SUSPECT** — assign this label when:
 - The target test **never fails** regardless of mutation (assertion is vacuous, or the test doesn't call the mutated code).
@@ -160,13 +160,13 @@ After processing all tests, produce:
 1. **Inline markdown table** in the conversation:
 
 ```
-| Test | Mutation (diff) | Result |
-|------|----------------|--------|
-| `test_foo` | `- return True`<br>`+ return False` in `auth.py:42` | Only `test_foo` failed ✓ |
-| `test_bar` | `- if x > 0`<br>`+ if x >= 0` in `parser.py:17` | Only `test_bar` failed ✓ |
-| `test_minimal` | BASELINE — shared path with `test_edge1`, `test_edge2`: any mutation to the shared chain fails all three; each sibling can be broken independently | — |
-| `test_eight` | COUPLED — entangled with `test_nine`: neither can be broken without failing the other; no separation of concerns | — |
-| `test_baz` | SUSPECT — no targeted mutation found in 5 attempts | — |
+| # | Test | Mutation (diff) | Result |
+|---|------|----------------|--------|
+| 1 | `test_foo` | `- return True`<br>`+ return False` in `auth.py:42` | Only `test_foo` failed ✓ |
+| 2 | `test_bar` | `- if x > 0`<br>`+ if x >= 0` in `parser.py:17` | Only `test_bar` failed ✓ |
+| 3 | `test_minimal` | shared path with `test_edge1` (#4), `test_edge2` (#5): any mutation to the shared chain fails all three; each sibling can be broken independently | BASELINE |
+| 4 | `test_eight` | entangled with `test_nine` (#5): neither can be broken without failing the other; no separation of concerns | COUPLED |
+| 5 | `test_baz` | no targeted mutation found in 5 attempts | SUSPECT |
 ```
 
 2. **Untested areas section** — after the table, add a second section:
