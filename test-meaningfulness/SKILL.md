@@ -63,6 +63,8 @@ Read the test code. Identify:
 - What assertion it makes.
 - Which source file(s) it imports from.
 
+As you read each source file, maintain a running **coverage map**: for each source file, record which functions, methods, branches, and meaningful code paths are exercised by at least one test. You will use this at the end to identify gaps.
+
 ### 4b. Generate a mutation (AI-driven, up to 5 attempts)
 
 Read the relevant source file. Reason about what minimal change would break the specific assertion this test makes **without touching any logic that other tests depend on exclusively**. Good mutations:
@@ -124,7 +126,20 @@ If no targeted mutation was found in 5 attempts, revert any applied changes, the
 
 **Always revert mutations before moving to the next test.** Verify revert by re-running the target test and confirming it passes.
 
-## Step 5 — Build the report
+## Step 5 — Identify untested areas
+
+After processing all tests, re-read each source file that appeared in the coverage map. Walk through every function, method, branch condition, and meaningful code path and check whether it was exercised by at least one test in the suite.
+
+Flag as untested:
+- **Functions/methods** with no test calling them at all.
+- **Branches** within tested functions that no test reaches (e.g., the `else` arm of a condition, an early-return guard, an exception handler, a loop that runs zero times).
+- **Code paths** that are only reachable with specific input conditions no test provides (e.g., empty input, `None`, negative numbers, maximum values).
+
+Do not flag:
+- Private helpers that are only called by already-tested functions and whose behavior is verified indirectly through those tests.
+- Dead code that is structurally unreachable (note it separately if you spot it).
+
+## Step 6 — Build the report
 
 After processing all tests, produce:
 
@@ -140,7 +155,21 @@ After processing all tests, produce:
 | `test_baz` | SUSPECT — no targeted mutation found in 5 attempts | — |
 ```
 
-2. **File output**: Write the same table (plus a summary header with date, test command, and counts of meaningful/baseline/coupled/suspect tests) to `mutation-report.md` in the current working directory.
+2. **Untested areas section** — after the table, add a second section:
+
+```
+## Untested Areas
+
+| Location | What is not tested |
+|----------|--------------------|
+| `auth.py:58` `verify_token()` | Function is never called by any test |
+| `parser.py:23` `else` branch | No test passes an empty string, so this branch is never reached |
+| `utils.py:10` `camel_to_snake()` — `None` input path | Guard at line 12 never exercised |
+```
+
+If no gaps are found, write: "All functions and branches in the evaluated source files are exercised by at least one test."
+
+3. **File output**: Write both the mutation table and the untested areas section (plus a summary header with date, test command, and counts of meaningful/baseline/coupled/suspect tests and untested area count) to `mutation-report.md` in the current working directory.
 
 ## Rules and constraints
 
