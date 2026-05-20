@@ -8,15 +8,18 @@ Since sbt 1.1, sbt automatically starts a server in the background when you run 
 
 **Must be run from the directory containing `build.sbt`** — sbt binds the server to that directory; `-client` calls from any other directory will not find it.
 
-Keep a named pipe open so sbt's interactive shell doesn't see EOF and exit:
+Keep a named pipe open so sbt's interactive shell doesn't see EOF and exit. Derive file names from the project path so multiple parallel instances never share files:
 
 ```bash
 cd /path/to/project                         # directory that contains build.sbt
-FIFO=$(mktemp -u /tmp/sbt-XXXX)
+SBT_KEY=$(echo "$PWD" | cksum | cut -d' ' -f1)   # unique per project directory
+FIFO="/tmp/sbt-fifo-${SBT_KEY}"
+LOG="/tmp/sbt-log-${SBT_KEY}.log"
+PID_FILE="/tmp/sbt-pid-${SBT_KEY}"
 mkfifo "$FIFO"
 exec 3>"$FIFO"                              # keep write-end open (prevents EOF)
-sbt < "$FIFO" > /tmp/sbt-server.log 2>&1 &
-echo $! > /tmp/sbt-server.pid
+sbt < "$FIFO" > "$LOG" 2>&1 &
+echo $! > "$PID_FILE"
 sleep 15                                    # wait for JVM + server to be ready
 ```
 
@@ -34,8 +37,8 @@ Each `-client` call returns in ~1–2 s instead of 10–15 s.
 
 ```bash
 sbt -client shutdown
-exec 3>&-          # close the write-end of the pipe
-rm "$FIFO"
+exec 3>&-
+rm -f "$FIFO" "$PID_FILE"
 ```
 
 ## Usage in `test-meaningfulness` skill
@@ -43,8 +46,11 @@ rm "$FIFO"
 ```bash
 # 1. Start the server once — from the directory that contains build.sbt
 cd /path/to/project   # e.g. nosara/.claude/worktrees/my-branch/proteus
-FIFO=$(mktemp -u /tmp/sbt-XXXX); mkfifo "$FIFO"; exec 3>"$FIFO"
-sbt < "$FIFO" > /tmp/sbt-server.log 2>&1 &
+SBT_KEY=$(echo "$PWD" | cksum | cut -d' ' -f1)
+FIFO="/tmp/sbt-fifo-${SBT_KEY}"; PID_FILE="/tmp/sbt-pid-${SBT_KEY}"
+mkfifo "$FIFO"; exec 3>"$FIFO"
+sbt < "$FIFO" > "/tmp/sbt-log-${SBT_KEY}.log" 2>&1 &
+echo $! > "$PID_FILE"
 sleep 15
 
 # 2. The skill then calls (fast) — also from the same directory:
@@ -52,7 +58,7 @@ sbt -client "testOnly com.foo.SomeSpec"
 sbt -client test
 
 # 3. Cleanup
-sbt -client shutdown; exec 3>&-; rm "$FIFO"
+sbt -client shutdown; exec 3>&-; rm -f "$FIFO" "$PID_FILE"
 ```
 
 ## Caveats
