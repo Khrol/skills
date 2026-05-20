@@ -173,36 +173,40 @@ Bad mutations (forbidden):
 bash "${CLAUDE_SKILL_DIR}/scripts/make-patch.sh" "mutation-work/test-${N}/mutation.patch"
 ```
 
-**3. Run target**:
+**3. Run target** — log must go inside `mutation-work/`, never `/tmp/`:
 ```bash
 bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" "mutation-work/test-NNN/target.log" "<run-one-cmd>"
 ```
+The script prints the last 30 log lines + `exit_code=N` to stdout — read the result directly, do NOT `cat` the log separately.
 - `exit_code=1` (test failed) → proceed to step 4.
 - `exit_code=0` (test passed) → mutation missed. **Revert** and generate a new mutation.
 
-**4. Run suite**:
+**4. Run suite** — log must go inside `mutation-work/`, never `/tmp/`:
 ```bash
 bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" "mutation-work/test-NNN/suite.log" "<run-all-cmd>"
 ```
-Read `suite.log` to identify which tests failed:
+Read which tests failed directly from the printed log tail — do NOT `cat` the log separately.
 - Only the target test/suite failed → **success**. Go to "On success" below.
 - Other tests also failed → mutation too broad. **Revert** and generate a narrower mutation.
 
-**Revert** (always after each attempt, whether success or failure):
+**Revert** (always after each attempt, whether success or failure) — this is a standalone bash call, never chained with anything else:
 ```bash
 git restore <mutated-file>
 ```
 
-After reverting, verify the target test passes before moving on:
+After reverting, verify the target test passes:
 ```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" /dev/null "<run-one-cmd>"   # must print exit_code=0
+bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" "mutation-work/test-NNN/verify.log" "<run-one-cmd>"
 ```
+Must print `exit_code=0`. If not, stop and investigate before continuing.
 
 ### On success
 
-Use the Write tool to create:
-- `mutation-work/test-NNN/outcome.txt` — content: `OK`
-- `mutation-work/test-NNN/mutation-desc.txt` — one-line markdown, e.g. `` `- x > 0`<br>`+ x >= 0` in `Parser.scala:42` ``
+**Separate steps — do NOT chain bash and Write tool in the same operation:**
+
+1. Revert (bash): `git restore <mutated-file>`
+2. Write tool → `mutation-work/test-NNN/outcome.txt` — content: `OK`
+3. Write tool → `mutation-work/test-NNN/mutation-desc.txt` — one-line markdown, e.g. `` `- x > 0`<br>`+ x >= 0` in `Parser.scala:42` ``
 
 ### 5f. After 5 failed attempts — diagnose
 
@@ -212,21 +216,21 @@ Revert any applied changes. Then check directionality:
 
 **BASELINE** — sibling CAN be broken without breaking the target (one-way dependency). Normal healthy pattern: target covers the minimal path; siblings extend it.
 
-Use the Write tool to create:
+Write these files with the Write tool — three separate Write calls, never combined with bash:
 - `mutation-work/test-NNN/outcome.txt` — `BASELINE`
 - `mutation-work/test-NNN/siblings.txt` — space-separated peer test numbers, e.g. `002 005`
 - `mutation-work/test-NNN/mutation-desc.txt` — e.g. `shared path with test-002, test-005: siblings can each be broken individually`
 
 **COUPLED** — sibling CANNOT be broken without also breaking the target (bidirectional entanglement). Code smell.
 
-Use the Write tool to create:
+Write these files with the Write tool — three separate Write calls, never combined with bash:
 - `mutation-work/test-NNN/outcome.txt` — `COUPLED`
 - `mutation-work/test-NNN/siblings.txt` — space-separated peer test numbers
 - `mutation-work/test-NNN/mutation-desc.txt` — e.g. `entangled with test-002: neither can be broken without failing the other`
 
 **SUSPECT** — target never fails regardless of mutation, or no stable co-failure group.
 
-Use the Write tool to create:
+Write these files with the Write tool — two separate Write calls, never combined with bash:
 - `mutation-work/test-NNN/outcome.txt` — `SUSPECT`
 - `mutation-work/test-NNN/mutation-desc.txt` — `no targeted mutation found in 5 attempts`
 
