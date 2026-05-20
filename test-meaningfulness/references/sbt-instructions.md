@@ -17,11 +17,12 @@ FIFO="/tmp/sbt-fifo-${SBT_KEY}"
 LOG="/tmp/sbt-log-${SBT_KEY}.log"
 PID_FILE="/tmp/sbt-pid-${SBT_KEY}"
 mkfifo "$FIFO"
-# Start sbt FIRST (it opens the read end and waits), then open the write end.
-# Reversed order deadlocks: exec 3>"$FIFO" blocks until a reader exists.
+# Open write-end first (blocks until a reader appears), then start sbt as reader.
+# Using a background keeper avoids `exec 3>` which zsh rejects inside && chains.
+( while true; do sleep 10; done ) > "$FIFO" &
+echo $! > "$PID_FILE"                       # save keeper PID for cleanup
 sbt < "$FIFO" > "$LOG" 2>&1 &
-echo $! > "$PID_FILE"
-exec 3>"$FIFO"                              # keep write-end open (prevents EOF)
+echo $! >> "$PID_FILE"                      # save sbt PID for cleanup
 # Wait for the server to be ready — active.json appears when it accepts connections
 until [ -f "project/target/active.json" ]; do sleep 2; done
 ```
@@ -40,7 +41,7 @@ Each `-client` call returns in ~1–2 s instead of 10–15 s.
 
 ```bash
 sbt -client shutdown
-exec 3>&-
+kill $(cat "$PID_FILE") 2>/dev/null   # stops keeper + sbt
 rm -f "$FIFO" "$PID_FILE"
 ```
 
@@ -52,9 +53,10 @@ cd /path/to/project   # e.g. nosara/.claude/worktrees/my-branch/proteus
 SBT_KEY=$(echo "$PWD" | cksum | cut -d' ' -f1)
 FIFO="/tmp/sbt-fifo-${SBT_KEY}"; PID_FILE="/tmp/sbt-pid-${SBT_KEY}"
 mkfifo "$FIFO"
-sbt < "$FIFO" > "/tmp/sbt-log-${SBT_KEY}.log" 2>&1 &
+( while true; do sleep 10; done ) > "$FIFO" &
 echo $! > "$PID_FILE"
-exec 3>"$FIFO"                              # open write-end AFTER sbt has opened read-end
+sbt < "$FIFO" > "/tmp/sbt-log-${SBT_KEY}.log" 2>&1 &
+echo $! >> "$PID_FILE"
 until [ -f "project/target/active.json" ]; do sleep 2; done
 
 # 2. The skill then calls (fast) — also from the same directory:
@@ -62,14 +64,15 @@ sbt -client "testOnly com.foo.SomeSpec"
 sbt -client test
 
 # 3. Cleanup
-sbt -client shutdown; exec 3>&-; rm -f "$FIFO" "$PID_FILE"
+sbt -client shutdown; kill $(cat "$PID_FILE") 2>/dev/null; rm -f "$FIFO" "$PID_FILE"
 ```
 
 ## Caveats
 
 | Issue | Notes |
 |-------|-------|
-| `sbt "exit" &` does NOT work | `exit` shuts the server down — the pipe approach above is required. |
+| `sbt "exit" &` does NOT work | `exit` shuts the server down — the keeper+pipe approach above is required. |
+| `exec 3>"$FIFO"` in a `&&` chain | zsh rejects this syntax; use the background keeper loop instead. |
 | Server crash | Delete `project/target/active.json` and restart. |
 | Classpath changes | Run `sbt -client reload` after editing `build.sbt` or adding dependencies. |
 | CI environments | No warm server to connect to; `-client` still works but gives no speedup. |
