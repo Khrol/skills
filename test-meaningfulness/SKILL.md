@@ -72,7 +72,9 @@ Read the relevant source file. Reason about what minimal change would break the 
 - Remove a single side-effect statement (e.g. remove an append or assignment)
 - Change an arithmetic operator (`+` → `-`)
 
-Bad mutations: deleting whole functions, changing function signatures, modifying shared state used by many tests.
+Bad mutations:
+- Deleting whole functions, changing function signatures, modifying shared state used by many tests.
+- **Input-specific special-casing** — do NOT add conditionals that check for the exact input values used in the target test (e.g., `if x == "foo": return wrong_result`). This is cheating: it manufactures a failure for one test by hardcoding its data rather than finding a real structural flaw. A valid mutation must change the general logic of the function, not add a guard that only triggers on one test's specific inputs.
 
 ### 4c. Apply the mutation
 
