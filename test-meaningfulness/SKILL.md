@@ -70,10 +70,29 @@ If the target test failed: run the full suite command. Check the output:
 
 ### 4f. After 5 failed attempts
 
-If no targeted mutation was found in 5 attempts, revert any applied changes, mark this test as **SUSPECT** in the report, and move on. A suspect test may indicate:
-- The test is not actually verifying the code (e.g., it only checks that no exception is raised with no real assertion)
-- The test is so coupled to other tests that any breaking change breaks the whole suite
-- The functionality is so tightly interwoven that isolated mutations aren't possible
+If no targeted mutation was found in 5 attempts, revert any applied changes, then **diagnose why** before assigning a label.
+
+#### Diagnose: BASELINE vs SUSPECT
+
+**Check the directionality of co-failures.** When every mutation that breaks the target test also breaks a consistent set of sibling tests, verify whether the relationship is one-way:
+
+- Pick one of the consistently co-failing sibling tests.
+- Apply a mutation specifically targeting that sibling (not the target test).
+- Run the full suite: does the sibling fail while the **target test stays green**?
+
+**BASELINE** — assign this label when the sibling CAN be broken without breaking the target test (one-way dependency). This is the normal and healthy **minimal-path + edge-cases pattern**:
+- The target test covers the minimal/happy-path behavior.
+- The sibling tests extend that path with additional inputs or complexity.
+- Any mutation to the shared code path breaks the target AND the siblings, because the siblings depend on the minimal path too.
+- But the siblings can be broken individually (e.g., by targeting the extra logic unique to each).
+- This is not a problem — it's intentional design. The target test documents the baseline contract.
+- Record which sibling tests share the path (e.g., "BASELINE — shared path with tests 2, 3, 4").
+
+**SUSPECT** — assign this label when:
+- The target test **never fails** regardless of mutation (assertion is vacuous, or the test doesn't call the mutated code).
+- Collateral failures are inconsistent across attempts — no stable sibling group.
+- The one-way check above shows the target test fails whenever a sibling fails (circular coupling, not a clean baseline relationship).
+- The test only checks that no exception is raised with no value assertion.
 
 **Always revert mutations before moving to the next test.** Verify revert by re-running the target test and confirming it passes.
 
@@ -88,10 +107,11 @@ After processing all tests, produce:
 |------|----------------|--------|
 | `test_foo` | `- return True`<br>`+ return False` in `auth.py:42` | Only `test_foo` failed ✓ |
 | `test_bar` | `- if x > 0`<br>`+ if x >= 0` in `parser.py:17` | Only `test_bar` failed ✓ |
+| `test_minimal` | BASELINE — shared path with `test_edge1`, `test_edge2`: any mutation to the shared chain fails all three; each sibling can be broken independently | — |
 | `test_baz` | SUSPECT — no targeted mutation found in 5 attempts | — |
 ```
 
-2. **File output**: Write the same table (plus a summary header with date, test command, and counts of meaningful/suspect tests) to `mutation-report.md` in the current working directory.
+2. **File output**: Write the same table (plus a summary header with date, test command, and counts of meaningful/baseline/suspect tests) to `mutation-report.md` in the current working directory.
 
 ## Rules and constraints
 
