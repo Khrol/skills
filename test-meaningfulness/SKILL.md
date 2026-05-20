@@ -32,7 +32,7 @@ All scripts are ready to use. **Never `cat` or `Read` script files — just invo
 
 | Purpose | Exact command |
 |---------|---------------|
-| Create all test work dirs | `bash "${CLAUDE_SKILL_DIR}/scripts/init-work-dir.sh" mutation-work <count>` |
+| Init work dirs + write names | `bash "${CLAUDE_SKILL_DIR}/scripts/init-work-dir.sh" mutation-work` |
 | Start sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-start.sh" /path/to/project` |
 | Stop sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-stop.sh" /path/to/project` |
 | Capture current edit as patch | `bash "${CLAUDE_SKILL_DIR}/scripts/make-patch.sh" mutation-work/test-NNN/mutation.patch` |
@@ -131,10 +131,12 @@ Run the test discovery command to get the list of individual test IDs:
 - pytest: `bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" /dev/null "pytest <subset> --collect-only -q 2>/dev/null"`
 - sbt/ScalaTest: read the spec source file directly to list test names
 
-Parse the output into a numbered list. Show the user the list and count, then initialise the work directory:
+Parse the output into a numbered list. Show the user the list and count.
+
+Use the Write tool to create `mutation-work/test-names.txt` with one test identifier per line (in order, no blank lines). Then initialise all work directories and name files in one call:
 
 ```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/init-work-dir.sh" mutation-work <count>
+bash "${CLAUDE_SKILL_DIR}/scripts/init-work-dir.sh" mutation-work
 ```
 
 ---
@@ -145,7 +147,7 @@ Work through each test in order, numbered `001`, `002`, …
 
 ### Setup (per test)
 
-Use the Write tool to create `mutation-work/test-NNN/name.txt` containing the full test identifier. (Directories were already created by `init-work-dir.sh`.)
+Directories and `name.txt` files were already created by `init-work-dir.sh`. No setup needed — proceed directly to 5a.
 
 ### 5a. Understand the test
 
