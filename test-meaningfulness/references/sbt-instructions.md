@@ -17,9 +17,11 @@ FIFO="/tmp/sbt-fifo-${SBT_KEY}"
 LOG="/tmp/sbt-log-${SBT_KEY}.log"
 PID_FILE="/tmp/sbt-pid-${SBT_KEY}"
 mkfifo "$FIFO"
-exec 3>"$FIFO"                              # keep write-end open (prevents EOF)
+# Start sbt FIRST (it opens the read end and waits), then open the write end.
+# Reversed order deadlocks: exec 3>"$FIFO" blocks until a reader exists.
 sbt < "$FIFO" > "$LOG" 2>&1 &
 echo $! > "$PID_FILE"
+exec 3>"$FIFO"                              # keep write-end open (prevents EOF)
 # Wait for the server to be ready — active.json appears when it accepts connections
 until [ -f "project/target/active.json" ]; do sleep 2; done
 ```
@@ -49,9 +51,10 @@ rm -f "$FIFO" "$PID_FILE"
 cd /path/to/project   # e.g. nosara/.claude/worktrees/my-branch/proteus
 SBT_KEY=$(echo "$PWD" | cksum | cut -d' ' -f1)
 FIFO="/tmp/sbt-fifo-${SBT_KEY}"; PID_FILE="/tmp/sbt-pid-${SBT_KEY}"
-mkfifo "$FIFO"; exec 3>"$FIFO"
+mkfifo "$FIFO"
 sbt < "$FIFO" > "/tmp/sbt-log-${SBT_KEY}.log" 2>&1 &
 echo $! > "$PID_FILE"
+exec 3>"$FIFO"                              # open write-end AFTER sbt has opened read-end
 until [ -f "project/target/active.json" ]; do sleep 2; done
 
 # 2. The skill then calls (fast) — also from the same directory:
