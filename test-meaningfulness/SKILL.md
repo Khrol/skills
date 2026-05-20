@@ -169,21 +169,23 @@ After processing all tests, produce:
 | 5 | `test_baz` | no targeted mutation found in 5 attempts | SUSPECT |
 ```
 
-2. **Untested areas section** — after the table, add a second section:
+2. **Untested areas summary** — after the table, add a short section with the **top 5 most important gaps** only. Prioritise: uncalled functions > untested error/edge branches > unreached conditions. Example:
 
 ```
-## Untested Areas
+## Untested Areas (top 5)
 
-| Location | What is not tested |
-|----------|--------------------|
-| `auth.py:58` `verify_token()` | Function is never called by any test |
-| `parser.py:23` `else` branch | No test passes an empty string, so this branch is never reached |
-| `utils.py:10` `camel_to_snake()` — `None` input path | Guard at line 12 never exercised |
+| # | Location | What is not tested |
+|---|----------|--------------------|
+| 1 | `auth.py:58` `verify_token()` | Function is never called by any test |
+| 2 | `parser.py:23` `else` branch | No test passes an empty string |
+| 3 | `utils.py:10` `camel_to_snake()` — `None` input | Guard at line 12 never exercised |
 ```
 
 If no gaps are found, write: "All functions and branches in the evaluated source files are exercised by at least one test."
 
-3. **File output**: Write both the mutation table and the untested areas section (plus a summary header with date, test command, and counts of meaningful/baseline/coupled/suspect tests and untested area count) to `mutation-report.md` in the current working directory.
+3. **File output**: Write two files to the current working directory:
+   - `mutation-report.md` — the mutation table plus a summary header (date, test command, counts of meaningful/baseline/coupled/suspect tests, total untested gap count).
+   - `untested-areas.md` — the **full** untested areas table with every gap found, not just the top 5.
 
 ## Rules and constraints
 
