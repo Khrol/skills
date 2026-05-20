@@ -26,6 +26,22 @@ bash "${CLAUDE_SKILL_DIR}/scripts/detect-pr.sh"
 
 ---
 
+## Scripts — call these directly, do not read them
+
+All scripts are ready to use. **Never `cat` or `Read` script files — just invoke them.**
+
+| Purpose | Exact command |
+|---------|---------------|
+| Start sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-start.sh" /path/to/project` |
+| Stop sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-stop.sh" /path/to/project` |
+| Apply a patch | `bash "${CLAUDE_SKILL_DIR}/scripts/apply-patch.sh" mutation-work/test-NNN/mutation.patch` |
+| Revert a patch | `bash "${CLAUDE_SKILL_DIR}/scripts/revert-patch.sh" mutation-work/test-NNN/mutation.patch` |
+| Build report table | `bash "${CLAUDE_SKILL_DIR}/scripts/build-report.sh" mutation-work` |
+
+All patch scripts must be run **from the project root** (the directory containing `build.sbt` / `setup.py` / etc.).
+
+---
+
 ## Work directory layout
 
 All intermediate and final artifacts go under `mutation-work/` in the project root. Create it at the start; never delete it mid-run.
