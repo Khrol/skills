@@ -20,7 +20,8 @@ mkfifo "$FIFO"
 exec 3>"$FIFO"                              # keep write-end open (prevents EOF)
 sbt < "$FIFO" > "$LOG" 2>&1 &
 echo $! > "$PID_FILE"
-sleep 15                                    # wait for JVM + server to be ready
+# Wait for the server to be ready — active.json appears when it accepts connections
+until [ -f "project/target/active.json" ]; do sleep 2; done
 ```
 
 ## Send commands (fast, no JVM startup)
@@ -51,7 +52,7 @@ FIFO="/tmp/sbt-fifo-${SBT_KEY}"; PID_FILE="/tmp/sbt-pid-${SBT_KEY}"
 mkfifo "$FIFO"; exec 3>"$FIFO"
 sbt < "$FIFO" > "/tmp/sbt-log-${SBT_KEY}.log" 2>&1 &
 echo $! > "$PID_FILE"
-sleep 15
+until [ -f "project/target/active.json" ]; do sleep 2; done
 
 # 2. The skill then calls (fast) — also from the same directory:
 sbt -client "testOnly com.foo.SomeSpec"
