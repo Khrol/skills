@@ -6,9 +6,12 @@ Since sbt 1.1, sbt automatically starts a server in the background when you run 
 
 ## Start the server (once)
 
+**Must be run from the directory containing `build.sbt`** — sbt binds the server to that directory; `-client` calls from any other directory will not find it.
+
 Keep a named pipe open so sbt's interactive shell doesn't see EOF and exit:
 
 ```bash
+cd /path/to/project                         # directory that contains build.sbt
 FIFO=$(mktemp -u /tmp/sbt-XXXX)
 mkfifo "$FIFO"
 exec 3>"$FIFO"                              # keep write-end open (prevents EOF)
@@ -38,13 +41,13 @@ rm "$FIFO"
 ## Usage in `test-meaningfulness` skill
 
 ```bash
-# 1. Start the server once
-cd /path/to/project
+# 1. Start the server once — from the directory that contains build.sbt
+cd /path/to/project   # e.g. nosara/.claude/worktrees/my-branch/proteus
 FIFO=$(mktemp -u /tmp/sbt-XXXX); mkfifo "$FIFO"; exec 3>"$FIFO"
 sbt < "$FIFO" > /tmp/sbt-server.log 2>&1 &
 sleep 15
 
-# 2. The skill then calls (fast):
+# 2. The skill then calls (fast) — also from the same directory:
 sbt -client "testOnly com.foo.SomeSpec"
 sbt -client test
 
