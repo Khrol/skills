@@ -33,14 +33,12 @@ All scripts are ready to use. **Never `cat` or `Read` script files — just invo
 | Purpose | Exact command |
 |---------|---------------|
 | Init work dirs + write names | `bash "${CLAUDE_SKILL_DIR}/scripts/init-work-dir.sh" mutation-work` |
-| Start sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-start.sh" /path/to/project` |
-| Stop sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-stop.sh" /path/to/project` |
 | Capture current edit as patch | `bash "${CLAUDE_SKILL_DIR}/scripts/make-patch.sh" mutation-work/test-NNN/mutation.patch` |
 | Run a command + capture log | `bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" mutation-work/test-NNN/suite.log "<cmd>"` |
 | Revert source to last commit | `git restore <mutated-file>` |
 | Build report table | `bash "${CLAUDE_SKILL_DIR}/scripts/build-report.sh" mutation-work` |
 
-All scripts must be run **from the project root** (the directory containing `build.sbt` / `setup.py` / etc.).
+All scripts must be run **from the project root**. For framework-specific server management (e.g. sbt), see [references/](references/).
 
 ---
 
@@ -85,10 +83,10 @@ Read the **PR context** block above (injected by the script at skill load time).
 Then:
 1. **Identify affected source files**: from the changed file list, collect all non-test source files.
 2. **Identify affected test files**: collect any changed test files directly, plus scan for test files that import or reference the changed source files (`grep -rl` the module/class names across the test directories).
-3. **Infer the test runner and commands** from the project structure:
+3. **Infer the test runner and run-all command** from the project structure:
    - `pytest.ini` / `pyproject.toml` / `setup.cfg` with `[tool:pytest]` → pytest. Run-all: `pytest <test-files> --tb=short -q`.
    - `package.json` with `jest` or `vitest` → Jest/Vitest. Run-all: `npx jest <pattern> --no-coverage`.
-   - `build.gradle` / `pom.xml` / `build.sbt` → JUnit/ScalaTest. For sbt: run-all `sbt -client test`.
+   - `build.gradle` / `pom.xml` / `build.sbt` → JUnit/ScalaTest. Infer the run-all command; for sbt see [references/sbt-instructions.md](references/sbt-instructions.md).
    - Fall back to reading any `Makefile`, `README`, or CI config (`.github/workflows/`, `Jenkinsfile`) for the actual test command used in CI.
 4. **Show a brief confirmation** — one message: PR number + title, changed source files, affected test files, inferred run commands, estimated test count. Proceed immediately.
 5. Skip the rest of Step 1 and go directly to Step 2.
@@ -100,20 +98,14 @@ Then:
 Ask the user (via AskUserQuestion) for the following before doing anything else:
 
 1. **Test subset**: Which test files or test cases to evaluate. Remind the user the suite should be small enough to run dozens of times.
-2. **Run-all command**: The command to run the full test subset (e.g. `sbt -client test`).
+2. **Run-all command**: The command to run the full test subset (e.g. `pytest tests/`, `npx jest`, `./gradlew test`).
 3. **Source root**: Where the source code being tested lives.
 
 ---
 
-## Step 2 — Start sbt server (sbt projects only)
+## Step 2 — Start test runner server (if needed)
 
-For sbt projects, start the persistent server before any test runs:
-
-```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/sbt-start.sh" /path/to/project
-```
-
-For other frameworks, skip this step.
+Some test runners use a persistent background server to avoid JVM/process startup overhead on every run. If the project uses such a runner, start the server now before any test runs. See [references/](references/) for framework-specific instructions.
 
 ---
 
@@ -127,7 +119,7 @@ Run the full test suite command. If any test is already failing, stop and tell t
 
 Run the test discovery command to get the list of individual test IDs:
 - pytest: `bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" /dev/null "pytest <subset> --collect-only -q 2>/dev/null"`
-- sbt/ScalaTest: read the spec source file directly to list test names
+- Other frameworks: read the test source files directly to enumerate test names, or use the framework's own list/discover command.
 
 Parse the output into a numbered list. Show the user the list and count.
 
@@ -282,11 +274,9 @@ Prepend to `mutation-report.md`:
 
 ---
 
-## Step 8 — Stop sbt server (sbt projects only)
+## Step 8 — Stop test runner server (if started in Step 2)
 
-```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/sbt-stop.sh" /path/to/project
-```
+If a persistent server was started in Step 2, stop it now. See [references/](references/) for framework-specific instructions.
 
 ---
 

@@ -47,24 +47,21 @@ rm -f "$FIFO" "$PID_FILE"
 
 ## Usage in `test-meaningfulness` skill
 
+Use the bundled scripts from the skill's `scripts/` directory — do not repeat the manual setup above.
+
+**Step 2 — Start server** (run from the directory containing `build.sbt`):
 ```bash
-# 1. Start the server once — from the directory that contains build.sbt
-cd /path/to/project   # e.g. nosara/.claude/worktrees/my-branch/proteus
-SBT_KEY=$(echo "$PWD" | cksum | cut -d' ' -f1)
-FIFO="/tmp/sbt-fifo-${SBT_KEY}"; PID_FILE="/tmp/sbt-pid-${SBT_KEY}"
-mkfifo "$FIFO"
-( while true; do sleep 10; done ) > "$FIFO" &
-echo $! > "$PID_FILE"
-sbt < "$FIFO" > "/tmp/sbt-log-${SBT_KEY}.log" 2>&1 &
-echo $! >> "$PID_FILE"
-until [ -f "project/target/active.json" ]; do sleep 2; done
+bash "${CLAUDE_SKILL_DIR}/scripts/sbt-start.sh" /path/to/project
+```
 
-# 2. The skill then calls (fast) — also from the same directory:
-sbt -client "testOnly com.foo.SomeSpec"
+**Run-all command** to pass to `run-cmd.sh`:
+```
 sbt -client test
+```
 
-# 3. Cleanup
-sbt -client shutdown; kill $(cat "$PID_FILE") 2>/dev/null; rm -f "$FIFO" "$PID_FILE"
+**Step 8 — Stop server**:
+```bash
+bash "${CLAUDE_SKILL_DIR}/scripts/sbt-stop.sh" /path/to/project
 ```
 
 ## Caveats
