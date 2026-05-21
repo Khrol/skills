@@ -6,32 +6,28 @@ Mutation testing skill for Claude Code. Evaluates how meaningful each unit test 
 
 ```mermaid
 flowchart TD
-    A([Start]) --> B[Detect context\nPR or manual interview]
-    B --> C[Start test runner server\nif needed — see references/]
-    C --> D[Run full suite — must be green]
-    D --> E[Enumerate tests\nWrite test-names.txt]
-    E --> F[init-work-dir.sh\ncreates test-NNN/ dirs + name.txt]
-    F --> G
+    A([Start]) --> B[Detect context + infer run-all cmd]
+    B --> C[Start server if needed]
+    C --> D{Suite green?}
+    D -->|no| STOP([Stop — fix baseline first])
+    D -->|yes| E[Enumerate tests\ninit-work-dir.sh]
 
-    subgraph G[For each test — up to 5 attempts]
-        direction TB
-        G1[5a. Read test + source\nupdate coverage map] --> G2
-        G2[5b. Edit source file\napply mutation] --> G3
-        G3[make-patch.sh\ncapture git diff → mutation.patch] --> G4
-        G4[run-cmd.sh\nrun-all → suite.log] --> G5{Result?}
-        G5 -->|only target failed| G6[✓ Success]
-        G5 -->|target did not fail| G7[Revert\ngit restore]
-        G5 -->|other tests also failed| G7
-        G7 -->|attempt < 5| G2
-        G7 -->|attempt = 5| G8[Diagnose\nBASELINE / COUPLED / SUSPECT]
-        G6 --> G9[Revert\ngit restore]
+    E --> F
+
+    subgraph F[For each test · up to 5 attempts]
+        F1[Edit source] --> F2[make-patch.sh]
+        F2 --> F3[run-cmd.sh → suite.log]
+        F3 --> F4{Failures?}
+        F4 -->|only target| F5[✓ git restore\nwrite OK]
+        F4 -->|missed / too broad| F6[git restore]
+        F6 -->|retry| F1
+        F6 -->|5 attempts| F7[Diagnose\nBASELINE · COUPLED · SUSPECT]
     end
 
-    G --> H[Write outcome.txt\nmutation-desc.txt\nsibling.txt]
-    H --> I[Step 6: Identify untested areas\nwalk coverage map]
-    I --> J[build-report.sh\nmutation-report.md]
-    J --> K[Stop test runner server\nif started]
-    K --> L([Done])
+    F --> G[Untested areas analysis]
+    G --> H[build-report.sh]
+    H --> I[Stop server]
+    I --> J([Done])
 ```
 
 ## Work directory
