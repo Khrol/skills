@@ -2,7 +2,24 @@
 
 Mutation testing skill for Claude Code. Evaluates how meaningful each unit test is by finding a minimal source code change that causes exactly that test to fail while all others stay green.
 
-## Flow
+## Concept
+
+```mermaid
+flowchart LR
+    Q([For each test:\nis it meaningful?]) --> M
+
+    M[Break the code\nit exercises] --> R{Which tests\nnow fail?}
+
+    R -->|only this one| OK["✓ MEANINGFUL\ntest catches real bugs"]
+
+    R -->|this + siblings\nbut siblings are isolable| BL["BASELINE\nhealthy shared path\ntest covers the minimum"]
+
+    R -->|this + siblings\nmutually entangled| CO["COUPLED\nredundant tests\nmissing separation"]
+
+    R -->|none — test\nnever fails| SU["SUSPECT\nvacuous assertion\nor wrong target"]
+```
+
+## Implementation flow
 
 ```mermaid
 flowchart LR
