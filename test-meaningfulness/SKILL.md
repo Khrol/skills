@@ -87,9 +87,9 @@ Then:
 1. **Identify affected source files**: from the changed file list, collect all non-test source files.
 2. **Identify affected test files**: collect any changed test files directly, plus scan for test files that import or reference the changed source files (`grep -rl` the module/class names across the test directories).
 3. **Infer the test runner and commands** from the project structure:
-   - `pytest.ini` / `pyproject.toml` / `setup.cfg` with `[tool:pytest]` → pytest. Run-all: `pytest <test-files> --tb=no -q`. Run-one: `pytest <file>::<TestClass>::<test_method> --tb=short -q`.
-   - `package.json` with `jest` or `vitest` → Jest/Vitest. Run-all: `npx jest <pattern> --no-coverage`. Run-one: `npx jest --testNamePattern="<name>" <file>`.
-   - `build.gradle` / `pom.xml` / `build.sbt` → JUnit/ScalaTest. Infer the right test command. For sbt: run-all `sbt -client test`, run-one `sbt -client "testOnly <ClassName>"`.
+   - `pytest.ini` / `pyproject.toml` / `setup.cfg` with `[tool:pytest]` → pytest. Run-all: `pytest <test-files> --tb=short -q`.
+   - `package.json` with `jest` or `vitest` → Jest/Vitest. Run-all: `npx jest <pattern> --no-coverage`.
+   - `build.gradle` / `pom.xml` / `build.sbt` → JUnit/ScalaTest. For sbt: run-all `sbt -client test`.
    - Fall back to reading any `Makefile`, `README`, or CI config (`.github/workflows/`, `Jenkinsfile`) for the actual test command used in CI.
 4. **Show a brief confirmation** — one message: PR number + title, changed source files, affected test files, inferred run commands, estimated test count. Proceed immediately.
 5. Skip the rest of Step 1 and go directly to Step 2.
@@ -102,8 +102,7 @@ Ask the user (via AskUserQuestion) for the following before doing anything else:
 
 1. **Test subset**: Which test files or test cases to evaluate. Remind the user the suite should be small enough to run dozens of times.
 2. **Run-all command**: The command to run the full test subset (e.g. `sbt -client test`).
-3. **Run-one command template**: The command to run a single test by name (e.g. `sbt -client "testOnly %CLASS%"`). Note the substitution pattern.
-4. **Source root**: Where the source code being tested lives.
+3. **Source root**: Where the source code being tested lives.
 
 ---
 
@@ -189,9 +188,9 @@ From the printed output, determine the outcome:
 git restore <mutated-file>
 ```
 
-After reverting, verify the target test passes:
+After reverting, verify the suite is green again:
 ```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" "mutation-work/test-NNN/verify.log" "<run-one-cmd>"
+bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" "mutation-work/test-NNN/verify.log" "<run-all-cmd>"
 ```
 Must print `exit_code=0`. If not, stop and investigate before continuing.
 
