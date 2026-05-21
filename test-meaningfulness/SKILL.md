@@ -54,7 +54,6 @@ mutation-work/
     name.txt             # full test identifier (one line)
     mutation.patch       # unified diff applied during the successful attempt
     mutation-desc.txt    # one-line markdown for the Mutation column of the report
-    target.log           # stdout+stderr of the run-one command
     suite.log            # stdout+stderr of the run-all command
     outcome.txt          # OK | BASELINE | COUPLED | SUSPECT
     siblings.txt         # (BASELINE/COUPLED only) space-separated peer test numbers
@@ -63,7 +62,7 @@ mutation-work/
 ```
 
 **You write**: `name.txt`, `mutation.patch`, `mutation-desc.txt`, `outcome.txt`, `siblings.txt`.
-**Scripts write**: `target.log`, `suite.log` (via redirected test runner output).
+**Scripts write**: `suite.log` (via redirected test runner output).
 
 `mutation-desc.txt` format:
 - OK: `` `- old line`<br>`+ new line` in `File.scala:42` ``
