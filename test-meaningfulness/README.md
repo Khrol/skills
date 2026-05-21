@@ -6,17 +6,18 @@ Mutation testing skill for Claude Code. Evaluates how meaningful each unit test 
 
 ```mermaid
 flowchart LR
-    Q([For each test:\nis it meaningful?]) --> M
-
-    M[Break the code\nit exercises] --> R{Which tests\nnow fail?}
+    Q([For each test:\nis it meaningful?]) --> M[Break the code\nit exercises]
+    M --> R{Which tests\nnow fail?}
 
     R -->|only this one| OK["✓ MEANINGFUL\ntest catches real bugs"]
-
-    R -->|this + siblings\nbut siblings are isolable| BL["BASELINE\nhealthy shared path\ntest covers the minimum"]
-
+    R -->|this + siblings\nbut siblings isolable| BL["BASELINE\nhealthy shared path\ntest covers the minimum"]
     R -->|this + siblings\nmutually entangled| CO["COUPLED\nredundant tests\nmissing separation"]
-
     R -->|none — test\nnever fails| SU["SUSPECT\nvacuous assertion\nor wrong target"]
+
+    style OK fill:#d4edda,stroke:#28a745,color:#155724
+    style BL fill:#fff3cd,stroke:#ffc107,color:#856404
+    style CO fill:#fde8d8,stroke:#fd7e14,color:#7d3a00
+    style SU fill:#f8d7da,stroke:#dc3545,color:#721c24
 ```
 
 ## Implementation flow
