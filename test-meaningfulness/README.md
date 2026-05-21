@@ -5,29 +5,25 @@ Mutation testing skill for Claude Code. Evaluates how meaningful each unit test 
 ## Flow
 
 ```mermaid
-flowchart TD
-    A([Start]) --> B[Detect context + infer run-all cmd]
-    B --> C[Start server if needed]
-    C --> D{Suite green?}
-    D -->|no| STOP([Stop — fix baseline first])
-    D -->|yes| E[Enumerate tests\ninit-work-dir.sh]
+flowchart LR
+    A([Start]) --> B[Detect\ncontext]
+    B --> C{Green?}
+    C -->|no| X([Fix first])
+    C -->|yes| D[Enumerate\ninit-work-dir]
 
-    E --> F
+    D --> E1
 
-    subgraph F[For each test · up to 5 attempts]
-        F1[Edit source] --> F2[make-patch.sh]
-        F2 --> F3[run-cmd.sh → suite.log]
-        F3 --> F4{Failures?}
-        F4 -->|only target| F5[✓ git restore\nwrite OK]
-        F4 -->|missed / too broad| F6[git restore]
-        F6 -->|retry| F1
-        F6 -->|5 attempts| F7[Diagnose\nBASELINE · COUPLED · SUSPECT]
+    subgraph LOOP[" Per test · 5 attempts "]
+        direction LR
+        E1[Edit\nsource] --> E2[make-patch] --> E3[run-cmd\nsuite.log]
+        E3 --> E4{Only\ntarget?}
+        E4 -->|yes| E5[✓ Revert]
+        E4 -->|no| E6[Revert]
+        E6 -->|retry| E1
+        E6 -->|×5| E7[BASELINE\nCOUPLED\nSUSPECT]
     end
 
-    F --> G[Untested areas analysis]
-    G --> H[build-report.sh]
-    H --> I[Stop server]
-    I --> J([Done])
+    LOOP --> F[Coverage\ngaps] --> G[build-report] --> H([Done])
 ```
 
 ## Work directory
