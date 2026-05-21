@@ -36,7 +36,7 @@ All scripts are ready to use. **Never `cat` or `Read` script files — just invo
 | Start sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-start.sh" /path/to/project` |
 | Stop sbt server | `bash "${CLAUDE_SKILL_DIR}/scripts/sbt-stop.sh" /path/to/project` |
 | Capture current edit as patch | `bash "${CLAUDE_SKILL_DIR}/scripts/make-patch.sh" mutation-work/test-NNN/mutation.patch` |
-| Run a test command + capture log | `bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" mutation-work/test-NNN/target.log "<cmd>"` |
+| Run a command + capture log | `bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" mutation-work/test-NNN/suite.log "<cmd>"` |
 | Revert source to last commit | `git restore <mutated-file>` |
 | Build report table | `bash "${CLAUDE_SKILL_DIR}/scripts/build-report.sh" mutation-work` |
 
@@ -173,21 +173,16 @@ Bad mutations (forbidden):
 bash "${CLAUDE_SKILL_DIR}/scripts/make-patch.sh" "mutation-work/test-${N}/mutation.patch"
 ```
 
-**3. Run target** — log must go inside `mutation-work/`, never `/tmp/`:
-```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" "mutation-work/test-NNN/target.log" "<run-one-cmd>"
-```
-The script prints the last 30 log lines + `exit_code=N` to stdout — read the result directly, do NOT `cat` the log separately.
-- `exit_code=1` (test failed) → proceed to step 4.
-- `exit_code=0` (test passed) → mutation missed. **Revert** and generate a new mutation.
-
-**4. Run suite** — log must go inside `mutation-work/`, never `/tmp/`:
+**3. Run suite** — log must go inside `mutation-work/`, never `/tmp/`:
 ```bash
 bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" "mutation-work/test-NNN/suite.log" "<run-all-cmd>"
 ```
-Read which tests failed directly from the printed log tail — do NOT `cat` the log separately.
-- Only the target test/suite failed → **success**. Go to "On success" below.
-- Other tests also failed → mutation too broad. **Revert** and generate a narrower mutation.
+The script prints the last 30 log lines + `exit_code=N` to stdout — read the result directly, do NOT `cat` the log separately.
+
+From the printed output, determine the outcome:
+- Target failed + **only** target failed → **success**. Go to "On success".
+- Target did **not** fail → mutation missed. **Revert** and generate a new mutation.
+- Target failed + other tests also failed → mutation too broad. **Revert** and generate a narrower mutation.
 
 **Revert** (always after each attempt, whether success or failure) — this is a standalone bash call, never chained with anything else:
 ```bash
