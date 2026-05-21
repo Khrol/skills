@@ -263,10 +263,10 @@ Display the table inline in the conversation.
 
 ### Untested areas summary (inline)
 
-After the table, show the **top 5 most important gaps** inline, prioritised: uncalled functions > untested error/edge branches > unreached conditions.
+After the table, show the **5 highest-priority gaps** inline — not the first 5 found, but the most impactful ones. Priority order: uncalled functions > untested error/edge branches > unreached conditions.
 
 ```
-## Untested Areas (top 5)
+## Untested Areas (highest priority, up to 5)
 
 | # | Location | What is not tested |
 |---|----------|--------------------|
