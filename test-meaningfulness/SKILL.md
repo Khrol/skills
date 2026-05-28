@@ -9,14 +9,14 @@ description: >
   meaningfulness, or run mutation testing. Also use during PR review or final
   stages of pull request development to verify that new or changed tests are
   actually catching the intended behaviour and are not vacuous.
-allowed-tools: Bash(bash *scripts/*) Bash(git restore *) Bash(git diff *) Write
+allowed-tools: Read Write mcp__test-mutation__verify_baseline mcp__test-mutation__enumerate_tests mcp__test-mutation__init_work_dir mcp__test-mutation__apply_mutation mcp__test-mutation__save_patch mcp__test-mutation__run_suite mcp__test-mutation__revert_file mcp__test-mutation__write_outcome mcp__test-mutation__build_report
 ---
 
 # Test Meaningfulness (Mutation Testing) Skill
 
-You evaluate how meaningful a test suite is by attempting targeted mutation testing: for each test, find a minimal source code change that causes **exactly that one test** to fail while all others remain green.
+> **Setup**: This skill requires the `test-mutation` MCP server. See [scripts/server.py](scripts/server.py) and the setup section at the bottom.
 
-> **References**: [sbt usage instructions](references/sbt-instructions.md)
+You evaluate how meaningful a test suite is by finding, for each test, a minimal source code change that causes **exactly that one test** to fail while all others stay green.
 
 ## PR context (auto-injected)
 
@@ -26,265 +26,132 @@ bash "${CLAUDE_SKILL_DIR}/scripts/detect-pr.sh"
 
 ---
 
-## Scripts — call these directly, do not read them
+## Step 1 — Collect context
 
-All scripts are ready to use. **Never `cat` or `Read` script files — just invoke them.**
+**If PR_DETECTED** (see PR context block above):
+- Extract changed source files and affected test files.
+- Infer `run_cmd` from project structure (`pytest.ini` → pytest, `package.json` → jest/vitest, `build.sbt` → sbt, etc.).
+- Show a one-line confirmation: PR title, changed files, inferred command. Proceed.
 
-| Purpose | Exact command |
-|---------|---------------|
-| Init work dirs + write names | `bash "${CLAUDE_SKILL_DIR}/scripts/init-work-dir.sh" mutation-work` |
-| Capture current edit as patch | `bash "${CLAUDE_SKILL_DIR}/scripts/make-patch.sh" mutation-work/test-NNN/mutation.patch` |
-| Run a command + capture log | `bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" mutation-work/test-NNN/suite.log "<cmd>"` |
-| Revert source to last commit | `git restore <mutated-file>` |
-| Build report table | `bash "${CLAUDE_SKILL_DIR}/scripts/build-report.sh" mutation-work` |
-
-All scripts must be run **from the project root**. For framework-specific server management (e.g. sbt), see [references/](references/).
+**If NO_PR** — ask the user for:
+1. Test files / pattern to evaluate
+2. Run-all command (e.g. `pytest tests/ -q`)
+3. Source root directory
 
 ---
 
-## Work directory layout
-
-All intermediate and final artifacts go under `mutation-work/` in the project root. Create it at the start; never delete it mid-run.
+## Step 2 — Baseline + enumerate
 
 ```
-mutation-work/
-  test-001/
-    name.txt             # full test identifier (one line)
-    mutation.patch       # unified diff applied during the successful attempt
-    mutation-desc.txt    # one-line markdown for the Mutation column of the report
-    suite.log            # stdout+stderr of the run-all command
-    outcome.txt          # OK | BASELINE | COUPLED | SUSPECT
-    siblings.txt         # (BASELINE/COUPLED only) space-separated peer test numbers
-  test-002/
-    ...
+verify_baseline(run_cmd, framework)   → must return success=true, stop if not
+enumerate_tests(run_cmd, framework)   → get the list of test IDs
+init_work_dir("mutation-work", [list of test IDs])
 ```
 
-**You write**: `name.txt`, `mutation.patch`, `mutation-desc.txt`, `outcome.txt`, `siblings.txt`.
-**Scripts write**: `suite.log` (via redirected test runner output).
-
-`mutation-desc.txt` format:
-- OK: `` `- old line`<br>`+ new line` in `File.scala:42` ``
-- BASELINE: `shared path with test-003, test-007: siblings can each be broken individually`
-- COUPLED: `entangled with test-003: neither can be broken without failing the other`
-- SUSPECT: `no targeted mutation found in 5 attempts`
+Show the user the test count. If `enumerate_tests` returns an empty list for a non-pytest project, collect test names by reading the test files directly (look for `def test_`, `it(`, `test(`, `describe(`, etc.) and pass them to `init_work_dir`.
 
 ---
 
-## Step 1 — Detect context and collect test suite info
+## Step 3 — For each test, find a targeted mutation
 
-### PR context detection (do this first)
+Work through test-001, test-002, … in order. Up to **5 attempts** per test.
 
-Read the **PR context** block above (injected by the script at skill load time).
+### Per attempt
 
-**If it starts with `PR_DETECTED`**: you are in a PR context. Extract:
-- PR number, title, URL, head branch, base branch.
-- The list of changed files under `changed_files:`.
+**a. Understand the test** — Read the test source. Identify: what function does it exercise? what assertion does it make? Maintain a running coverage map of all source files touched (for Step 4).
 
-Then:
-1. **Identify affected source files**: from the changed file list, collect all non-test source files.
-2. **Identify affected test files**: collect any changed test files directly, plus scan for test files that import or reference the changed source files (`grep -rl` the module/class names across the test directories).
-3. **Infer the test runner and run-all command** from the project structure:
-   - `pytest.ini` / `pyproject.toml` / `setup.cfg` with `[tool:pytest]` → pytest. Run-all: `pytest <test-files> --tb=short -q`.
-   - `package.json` with `jest` or `vitest` → Jest/Vitest. Run-all: `npx jest <pattern> --no-coverage`.
-   - `build.gradle` / `pom.xml` / `build.sbt` → JUnit/ScalaTest. Infer the run-all command; for sbt see [references/sbt-instructions.md](references/sbt-instructions.md).
-   - Fall back to reading any `Makefile`, `README`, or CI config (`.github/workflows/`, `Jenkinsfile`) for the actual test command used in CI.
-4. **Show a brief confirmation** — one message: PR number + title, changed source files, affected test files, inferred run commands, estimated test count. Proceed immediately.
-5. Skip the rest of Step 1 and go directly to Step 2.
-
-**If it starts with `NO_PR`**: fall through to the manual interview below.
-
-### Manual interview (non-PR context only)
-
-Ask the user (via AskUserQuestion) for the following before doing anything else:
-
-1. **Test subset**: Which test files or test cases to evaluate. Remind the user the suite should be small enough to run dozens of times.
-2. **Run-all command**: The command to run the full test subset (e.g. `pytest tests/`, `npx jest`, `./gradlew test`).
-3. **Source root**: Where the source code being tested lives.
-
----
-
-## Step 2 — Start test runner server (if needed)
-
-Some test runners use a persistent background server to avoid JVM/process startup overhead on every run. If the project uses such a runner, start the server now before any test runs. See [references/](references/) for framework-specific instructions.
-
----
-
-## Step 3 — Baseline: verify the suite is green
-
-Run the full test suite command. If any test is already failing, stop and tell the user — the baseline must be clean.
-
----
-
-## Step 4 — Enumerate tests
-
-Run the test discovery command to get the list of individual test IDs:
-- pytest: `bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" /dev/null "pytest <subset> --collect-only -q 2>/dev/null"`
-- Other frameworks: read the test source files directly to enumerate test names, or use the framework's own list/discover command.
-
-Parse the output into a numbered list. Show the user the list and count.
-
-Use the Write tool to create `mutation-work/test-names.txt` with one test identifier per line (in order, no blank lines). Then initialise all work directories and name files in one call:
-
-```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/init-work-dir.sh" mutation-work
-```
-
----
-
-## Step 5 — For each test, find a targeted mutation
-
-Work through each test in order, numbered `001`, `002`, …
-
-### Setup (per test)
-
-Directories and `name.txt` files were already created by `init-work-dir.sh`. No setup needed — proceed directly to 5a.
-
-### 5a. Understand the test
-
-Read the test code. Identify what function/method it exercises and what assertion it makes. As you read each source file, maintain a running **coverage map** for Step 6.
-
-### 5b–5e. Generate and trial the mutation (up to 5 attempts)
-
-**Generate** a mutation. Good mutations:
-- Flip a comparison (`>` → `>=`, `==` → `!=`)
-- Change a return value constant (`return True` → `return False`)
-- Negate a condition (`if x` → `if not x`)
+**b. Generate a mutation** — Reason about a minimal change that would break this test without breaking others. Good mutations:
+- Flip a comparison: `>` → `>=`, `==` → `!=`
+- Negate a condition: `if x` → `if not x`
+- Change a return constant: `return True` → `return False`
 - Remove a single side-effect statement
-- Change an arithmetic operator (`+` → `-`)
+- Change an arithmetic operator: `+` → `-`
 
-Bad mutations (forbidden):
-- Deleting whole functions or changing signatures.
-- **Input-specific special-casing** — do NOT add `if x == <test-input>: return wrong`. A valid mutation changes general logic, not a guard that only triggers on one test's data.
+**Forbidden**: deleting whole functions, changing signatures, input-specific special-casing (`if x == <test_input>: return wrong`).
 
-**1. Edit** the source file using the Edit tool to apply the mutation.
+**c. Apply, run, revert** — always in this order, never skipping the revert:
 
-**2. Capture the patch** (from the git diff of the edit):
-```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/make-patch.sh" "mutation-work/test-${N}/mutation.patch"
+```
+apply_mutation(file_path, old_str, new_str)
+  → if success=false: fix old_str and retry without counting the attempt
+save_patch("mutation-work", "NNN")
+run_suite("mutation-work", "NNN", run_cmd, framework)
+revert_file(file_path)   ← always, even on success
 ```
 
-**3. Run suite** — log must go inside `mutation-work/`, never `/tmp/`:
-```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" "mutation-work/test-NNN/suite.log" "<run-all-cmd>"
+**d. Decide outcome from `run_suite` result**:
+- `failed_tests == [this_test]` → **success** → `write_outcome(..., "OK", description)`
+- `this_test not in failed_tests` → mutation missed → generate a new mutation
+- `this_test in failed_tests AND len > 1` → too broad → generate a narrower mutation
+
+### After 5 failed attempts — diagnose
+
+Look at which tests co-failed most consistently across attempts. Pick one sibling. Apply a mutation targeting *only* the sibling. Run suite.
+
+- **Sibling fails, target stays green** → `BASELINE` (healthy: target covers the minimal path)
+- **Both fail together always** → `COUPLED` (code smell: tests are entangled)
+- **No stable co-failure pattern, or target never fails** → `SUSPECT` (vacuous assertion?)
+
 ```
-The script prints the last 30 log lines + `exit_code=N` to stdout — read the result directly, do NOT `cat` the log separately.
-
-From the printed output, determine the outcome:
-- Target failed + **only** target failed → **success**. Go to "On success".
-- Target did **not** fail → mutation missed. **Revert** and generate a new mutation.
-- Target failed + other tests also failed → mutation too broad. **Revert** and generate a narrower mutation.
-
-**Revert** (always after each attempt, whether success or failure) — this is a standalone bash call, never chained with anything else:
-```bash
-git restore <mutated-file>
+write_outcome("mutation-work", "NNN", outcome, description, siblings="002 005")
 ```
-
-After reverting, verify the suite is green again:
-```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/run-cmd.sh" "mutation-work/test-NNN/verify.log" "<run-all-cmd>"
-```
-Must print `exit_code=0`. If not, stop and investigate before continuing.
-
-### On success
-
-**Separate steps — do NOT chain bash and Write tool in the same operation:**
-
-1. Revert (bash): `git restore <mutated-file>`
-2. Write tool → `mutation-work/test-NNN/outcome.txt` — content: `OK`
-3. Write tool → `mutation-work/test-NNN/mutation-desc.txt` — one-line markdown, e.g. `` `- x > 0`<br>`+ x >= 0` in `Parser.scala:42` ``
-
-### 5f. After 5 failed attempts — diagnose
-
-Revert any applied changes. Then check directionality:
-
-**Pick one consistently co-failing sibling test. Apply a mutation targeting that sibling. Run the full suite: does the sibling fail while the target stays green?**
-
-**BASELINE** — sibling CAN be broken without breaking the target (one-way dependency). Normal healthy pattern: target covers the minimal path; siblings extend it.
-
-Write these files with the Write tool — three separate Write calls, never combined with bash:
-- `mutation-work/test-NNN/outcome.txt` — `BASELINE`
-- `mutation-work/test-NNN/siblings.txt` — space-separated peer test numbers, e.g. `002 005`
-- `mutation-work/test-NNN/mutation-desc.txt` — e.g. `shared path with test-002, test-005: siblings can each be broken individually`
-
-**COUPLED** — sibling CANNOT be broken without also breaking the target (bidirectional entanglement). Code smell.
-
-Write these files with the Write tool — three separate Write calls, never combined with bash:
-- `mutation-work/test-NNN/outcome.txt` — `COUPLED`
-- `mutation-work/test-NNN/siblings.txt` — space-separated peer test numbers
-- `mutation-work/test-NNN/mutation-desc.txt` — e.g. `entangled with test-002: neither can be broken without failing the other`
-
-**SUSPECT** — target never fails regardless of mutation, or no stable co-failure group.
-
-Write these files with the Write tool — two separate Write calls, never combined with bash:
-- `mutation-work/test-NNN/outcome.txt` — `SUSPECT`
-- `mutation-work/test-NNN/mutation-desc.txt` — `no targeted mutation found in 5 attempts`
 
 ---
 
-## Step 6 — Identify untested areas
+## Step 4 — Identify untested areas
 
-After processing all tests, re-read each source file in the coverage map. Walk through every function, method, branch condition, and meaningful code path and check whether it was exercised.
-
-Flag as untested:
-- **Functions/methods** with no test calling them at all.
-- **Branches** no test reaches (else arm, early-return guard, exception handler).
-- **Input conditions** no test provides (empty input, `None`, negative numbers).
-
-Do not flag: private helpers verified indirectly, or structurally dead code (note dead code separately).
-
----
-
-## Step 7 — Build the report
-
-### Mutation table (inline + file)
-
-Run the report builder and save to file:
-
-```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/build-report.sh" mutation-work | tee mutation-report.md
-```
-
-Display the table inline in the conversation.
-
-### Untested areas summary (inline)
-
-After the table, show the **5 highest-priority gaps** inline — not the first 5 found, but the most impactful ones. Priority order: uncalled functions > untested error/edge branches > unreached conditions.
-
-```
-## Untested Areas (highest priority, up to 5)
-
-| # | Location | What is not tested |
-|---|----------|--------------------|
-| 1 | `Auth.scala:58` `verifyToken()` | Never called by any test |
-| 2 | `Parser.scala:23` `else` branch | No test passes an empty string |
-```
-
-If no gaps, write: "All functions and branches in the evaluated source files are exercised by at least one test."
-
-### Full untested areas (file)
+Re-read each source file in the coverage map. Flag:
+- Functions/methods with no test calling them
+- Branches no test reaches (else arms, early-return guards, exception handlers)
+- Input conditions no test exercises (empty, None, negative, etc.)
 
 Write every gap to `untested-areas.md` (not just the top 5).
 
-### Summary header in mutation-report.md
+---
 
-Prepend to `mutation-report.md`:
-- Date, test command
-- Counts: meaningful (OK) / BASELINE / COUPLED / SUSPECT
-- Total untested gap count (link to `untested-areas.md`)
+## Step 5 — Build and display the report
+
+```
+build_report("mutation-work")
+```
+
+Display the returned `report_markdown` inline. Then prepend a summary header to `mutation-report.md`:
+
+```
+## Mutation Testing Report — <date>
+**Command**: `<run_cmd>`
+**Results**: N meaningful (OK) / N BASELINE / N COUPLED / N SUSPECT
+**Untested gaps**: N (see untested-areas.md)
+```
+
+Show the 5 highest-priority gaps inline (uncalled functions > untested error branches > unreached conditions).
 
 ---
 
-## Step 8 — Stop test runner server (if started in Step 2)
+## Rules
 
-If a persistent server was started in Step 2, stop it now. See [references/](references/) for framework-specific instructions.
+- **Always revert** after every attempt, whether success or failure. Never leave source mutated.
+- **Never mutate test files** — only production/source code.
+- Show progress: announce each test and attempt number as you go.
+- If the suite takes > 60 s per run, warn the user before starting.
 
 ---
 
-## Rules and constraints
+## Setup: MCP server
 
-- **Always revert mutations** before moving to the next test. Never leave source in a mutated state.
-- **Restore immediately on any error** (test runner crash, unexpected output).
-- **Do not modify test files** — only mutate source/production code.
-- **Do not mutate the same line for different tests** if those tests share that code path.
-- If the test suite takes more than 60 seconds per run, warn the user before starting.
-- Show progress as you go: announce which test and which attempt number you are on.
+The server uses [PEP 723 inline dependencies](https://peps.python.org/pep-0723/) so `uv run` installs `mcp` automatically on first launch — no manual `pip install` needed.
+
+Add to your project's `.mcp.json` (or global `~/.claude/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "test-mutation": {
+      "command": "uv",
+      "args": ["run", "/absolute/path/to/skills/test-meaningfulness/scripts/server.py"]
+    }
+  }
+}
+```
+
+`uv` must be on `PATH`. The server's working directory is set to the project root by Claude Code automatically.
