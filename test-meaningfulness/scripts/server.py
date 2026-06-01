@@ -20,8 +20,6 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-# server.py lives in scripts/; skill root is one level up
-SKILL_DIR = Path(__file__).parent.parent
 PROJECT_ROOT = Path.cwd()
 
 mcp = FastMCP("test-mutation")
@@ -67,12 +65,10 @@ def _parse_failed_tests(output: str, framework: str) -> list[str]:
     return []
 
 
-def _run_script(script_name: str, *args: str) -> subprocess.CompletedProcess:
+def _run(cmd: str | list, **kwargs) -> subprocess.CompletedProcess:
+    """Run a command from the project root, capturing output."""
     return subprocess.run(
-        ["bash", str(SKILL_DIR / "scripts" / script_name), *args],
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
+        cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, **kwargs
     )
 
 
@@ -83,9 +79,7 @@ def _run_script(script_name: str, *args: str) -> subprocess.CompletedProcess:
 @mcp.tool()
 def verify_baseline(run_cmd: str, framework: str = "auto") -> dict:
     """Run the full test suite and confirm it's green. Must succeed before mutation testing starts."""
-    result = subprocess.run(
-        run_cmd, shell=True, cwd=PROJECT_ROOT, capture_output=True, text=True
-    )
+    result = _run(run_cmd, shell=True)
     output = result.stdout + result.stderr
     failed = _parse_failed_tests(output, framework)
     return {
@@ -103,14 +97,8 @@ def enumerate_tests(run_cmd: str, framework: str = "auto") -> dict:
     Returns names in the exact format the runner uses in failure output —
     this is critical for accurate matching later.
     """
-    # pytest --collect-only -q
     if framework in ("pytest", "auto"):
-        base = run_cmd.split()[0]  # e.g. "pytest" or "python -m pytest"
-        # Preserve any path args but inject --collect-only -q
-        collect_cmd = run_cmd + " --collect-only -q 2>/dev/null"
-        result = subprocess.run(
-            collect_cmd, shell=True, cwd=PROJECT_ROOT, capture_output=True, text=True
-        )
+        result = _run(run_cmd + " --collect-only -q 2>/dev/null", shell=True)
         tests = [
             line.strip()
             for line in result.stdout.splitlines()
@@ -133,17 +121,18 @@ def init_work_dir(work_dir: str, test_names: list[str]) -> dict:
     wd = PROJECT_ROOT / work_dir
     wd.mkdir(parents=True, exist_ok=True)
 
-    names_file = wd / "test-names.txt"
-    names_file.write_text("\n".join(test_names) + "\n")
+    (wd / "test-names.txt").write_text("\n".join(test_names) + "\n")
 
-    result = _run_script("init-work-dir.sh", str(wd))
+    for i, name in enumerate(test_names, start=1):
+        test_dir = wd / f"test-{i:03d}"
+        test_dir.mkdir(exist_ok=True)
+        (test_dir / "name.txt").write_text(name + "\n")
+
     dirs = sorted(wd.glob("test-*/"))
     return {
-        "success": result.returncode == 0,
+        "success": True,
         "count": len(dirs),
         "work_dir": str(wd.relative_to(PROJECT_ROOT)),
-        "output": result.stdout.strip(),
-        "error": result.stderr.strip() if result.returncode != 0 else None,
     }
 
 
@@ -178,13 +167,15 @@ def save_patch(work_dir: str, test_id: str) -> dict:
     patch_path = PROJECT_ROOT / work_dir / f"test-{test_id}" / "mutation.patch"
     patch_path.parent.mkdir(parents=True, exist_ok=True)
 
-    result = _run_script("make-patch.sh", str(patch_path))
-    patch_content = patch_path.read_text() if patch_path.exists() and result.returncode == 0 else ""
+    result = _run(["git", "diff"])
+    if not result.stdout.strip():
+        return {"success": False, "error": "No unstaged changes found — apply a mutation first."}
+
+    patch_path.write_text(result.stdout)
     return {
-        "success": result.returncode == 0,
+        "success": True,
         "patch_file": str(patch_path.relative_to(PROJECT_ROOT)),
-        "patch_preview": patch_content[:1000] if patch_content else "",
-        "error": result.stderr.strip() if result.returncode != 0 else None,
+        "patch_preview": result.stdout[:1000],
     }
 
 
@@ -198,16 +189,15 @@ def run_suite(work_dir: str, test_id: str, run_cmd: str, framework: str = "auto"
     log_path = PROJECT_ROOT / work_dir / f"test-{test_id}" / "suite.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    result = _run_script("run-cmd.sh", str(log_path), run_cmd)
+    result = _run(run_cmd, shell=True)
+    output = result.stdout + result.stderr
+    log_path.write_text(output)
 
-    log_content = log_path.read_text() if log_path.exists() else ""
-    failed = _parse_failed_tests(log_content, framework)
-
+    failed = _parse_failed_tests(output, framework)
     return {
         "exit_code": result.returncode,
         "failed_tests": failed,
-        # run-cmd.sh prints the last 30 log lines to stdout — include that too
-        "output_tail": result.stdout[-3000:],
+        "output_tail": output[-3000:],
         "log_file": str(log_path.relative_to(PROJECT_ROOT)),
     }
 
@@ -215,14 +205,8 @@ def run_suite(work_dir: str, test_id: str, run_cmd: str, framework: str = "auto"
 @mcp.tool()
 def revert_file(file_path: str) -> dict:
     """Restore a source file to its last committed state and verify it is clean."""
-    restore = subprocess.run(
-        ["git", "restore", file_path],
-        cwd=PROJECT_ROOT, capture_output=True, text=True,
-    )
-    diff = subprocess.run(
-        ["git", "diff", "--exit-code", file_path],
-        cwd=PROJECT_ROOT, capture_output=True, text=True,
-    )
+    restore = _run(["git", "restore", file_path])
+    diff = _run(["git", "diff", "--exit-code", file_path])
     return {
         "success": restore.returncode == 0,
         "is_clean": diff.returncode == 0,
@@ -261,21 +245,31 @@ def write_outcome(
 
 @mcp.tool()
 def build_report(work_dir: str) -> dict:
-    """Run build-report.sh and write mutation-report.md. Returns the markdown table."""
+    """Build the mutation report table and write mutation-report.md."""
     wd = PROJECT_ROOT / work_dir
     report_path = PROJECT_ROOT / "mutation-report.md"
 
-    result = subprocess.run(
-        f'bash "{SKILL_DIR}/scripts/build-report.sh" "{wd}" | tee "{report_path}"',
-        shell=True, cwd=PROJECT_ROOT, capture_output=True, text=True,
-    )
+    rows = []
+    for test_dir in sorted(wd.glob("test-*/"), key=lambda p: p.name):
+        num = re.search(r"\d+", test_dir.name).group()
+        name = (test_dir / "name.txt").read_text().strip() if (test_dir / "name.txt").exists() else "unknown"
+        outcome = (test_dir / "outcome.txt").read_text().strip() if (test_dir / "outcome.txt").exists() else "?"
+        desc = (test_dir / "mutation-desc.txt").read_text().strip() if (test_dir / "mutation-desc.txt").exists() else "—"
 
-    report = report_path.read_text() if report_path.exists() else result.stdout
+        result_col = f"Only `{name}` failed ✓" if outcome == "OK" else f"**{outcome}**"
+        rows.append(f"| {num} | `{name}` | {desc} | {result_col} |")
+
+    table = "\n".join([
+        "| # | Test | Mutation | Result |",
+        "|---|------|----------|--------|",
+        *rows,
+    ])
+    report_path.write_text(table + "\n")
+
     return {
-        "success": result.returncode == 0,
-        "report_markdown": report,
+        "success": True,
+        "report_markdown": table,
         "report_file": "mutation-report.md",
-        "error": result.stderr.strip() if result.returncode != 0 else None,
     }
 
 
