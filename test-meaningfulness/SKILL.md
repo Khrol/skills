@@ -16,45 +16,15 @@ allowed-tools: Read Workflow
 
 > **Setup**: This skill requires the `test-mutation` MCP server. See [scripts/server.py](scripts/server.py) and the setup section at the bottom.
 
-## PR context (auto-injected)
-
 ```!
 echo "SKILL_DIR=${CLAUDE_SKILL_DIR}"
 ```
 
-```!
-bash "${CLAUDE_SKILL_DIR}/scripts/detect-pr.sh"
-```
+## Instructions
 
----
+Call the Workflow tool with `scriptPath` set to `<SKILL_DIR>/workflow.js` (use the path printed above).
 
-## Step 1 — Collect context
-
-**If PR_DETECTED** (see PR context block above):
-- Extract changed source files, affected test files, and infer `run_cmd` from project structure (`pytest.ini` → pytest, `package.json` → jest/vitest, `build.sbt` → sbt, etc.).
-- Show a one-line confirmation: PR title, changed files, inferred command.
-
-**If NO_PR** — ask the user for: test files/pattern, run-all command, source root.
-
----
-
-## Step 2 — Run the mutation workflow
-
-Call the Workflow tool with:
-- `scriptPath`: `<SKILL_DIR>/workflow.js` (use the SKILL_DIR printed above)
-- `args`: an object with the PR context collected above, for example:
-  ```json
-  {
-    "pr_detected": true,
-    "pr_summary": "PR #42: add cart discount logic",
-    "changed_files": ["src/cart.py", "tests/test_cart.py"],
-    "run_cmd": "pytest tests/ -q",
-    "source_root": "src"
-  }
-  ```
-  Set `pr_detected: false` and omit PR fields if no PR was found.
-
-The workflow handles baseline verification, per-test mutation finding (sequential, with context isolation per test), untested-area analysis, and report generation. Display the returned report inline when it completes.
+The workflow's first agent handles PR detection and context collection (asking the user if needed). It then runs baseline verification, per-test mutation finding, and report generation. Display the returned report inline when it completes.
 
 ---
 
