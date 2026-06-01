@@ -20,6 +20,9 @@ allowed-tools: Read Workflow
 
 ```!
 echo "SKILL_DIR=${CLAUDE_SKILL_DIR}"
+```
+
+```!
 bash "${CLAUDE_SKILL_DIR}/scripts/detect-pr.sh"
 ```
 
