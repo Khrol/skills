@@ -8,12 +8,14 @@ export const meta = {
   ],
 }
 
+// ── Schemas ──────────────────────────────────────────────────────────────────
+
 const CONTEXT_SCHEMA = {
   type: 'object',
   properties: {
-    run_cmd: { type: 'string' },
-    work_dir: { type: 'string' },
-    framework: { type: 'string' },
+    run_cmd:     { type: 'string' },
+    work_dir:    { type: 'string' },
+    framework:   { type: 'string' },
     source_root: { type: 'string' },
   },
   required: ['run_cmd', 'work_dir', 'framework', 'source_root'],
@@ -22,42 +24,86 @@ const CONTEXT_SCHEMA = {
 const SETUP_SCHEMA = {
   type: 'object',
   properties: {
-    tests: { type: 'array', items: { type: 'string' } },
+    tests:     { type: 'array', items: { type: 'string' } },
     framework: { type: 'string' },
-    count: { type: 'number' },
+    count:     { type: 'number' },
   },
   required: ['tests', 'framework', 'count'],
 }
 
-const MUTATION_SCHEMA = {
+// LLM output: what mutation to try
+const CANDIDATE_SCHEMA = {
   type: 'object',
   properties: {
-    test_name: { type: 'string' },
-    test_id: { type: 'string' },
-    outcome: { type: 'string', enum: ['OK', 'BASELINE', 'COUPLED', 'SUSPECT'] },
-    mutation_desc: { type: 'string' },
+    file_path: { type: 'string', description: 'relative path to the source file to mutate' },
+    old_str:   { type: 'string', description: 'exact verbatim substring to replace' },
+    new_str:   { type: 'string', description: 'replacement string' },
+    reasoning: { type: 'string', description: 'one sentence explaining why this mutation targets the test' },
   },
-  required: ['test_name', 'test_id', 'outcome', 'mutation_desc'],
+  required: ['file_path', 'old_str', 'new_str', 'reasoning'],
 }
 
-// args may contain: { pr_detected, pr_summary, changed_files, run_cmd, source_root }
-// passed from SKILL.md after PR detection
+// Deterministic MCP call results
+const APPLY_SCHEMA = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    error:   { type: 'string' },
+  },
+  required: ['success'],
+}
+
+const RUN_SCHEMA = {
+  type: 'object',
+  properties: {
+    exit_code:    { type: 'number' },
+    failed_tests: { type: 'array', items: { type: 'string' } },
+    output_tail:  { type: 'string' },
+  },
+  required: ['exit_code', 'failed_tests'],
+}
+
+const REVERT_SCHEMA = {
+  type: 'object',
+  properties: {
+    success:  { type: 'boolean' },
+    is_clean: { type: 'boolean' },
+    error:    { type: 'string' },
+  },
+  required: ['success'],
+}
+
+// LLM output: which sibling to probe for diagnosis
+const SIBLING_SCHEMA = {
+  type: 'object',
+  properties: {
+    sibling_test: { type: 'string', description: 'the co-failing test to probe' },
+    file_path:    { type: 'string' },
+    old_str:      { type: 'string' },
+    new_str:      { type: 'string' },
+    reasoning:    { type: 'string' },
+  },
+  required: ['sibling_test', 'file_path', 'old_str', 'new_str'],
+}
+
+// ── Phase 1: Setup ────────────────────────────────────────────────────────────
 
 phase('Setup')
 
+// args may contain: { pr_detected, pr_summary, changed_files, run_cmd, source_root }
 const ctx = await agent(
   `You are the context-collection step of a mutation testing workflow.
 
 PR context passed in (may be null/partial): ${JSON.stringify(args)}
 
 Your job:
-1. If args already contains run_cmd (inferred from PR context), use it directly.
+1. If args already contains run_cmd, use it directly.
 2. Otherwise ask the user for:
    a. Test files/pattern to evaluate
    b. Run-all command (e.g. "pytest tests/ -q", "npm test", "sbt test")
    c. Source root directory (default: ".")
 3. Set work_dir to "mutation-work" unless overridden.
-4. Detect framework from run_cmd if not already known (pytest.ini → pytest, package.json scripts → jest/vitest, build.sbt → sbt, etc.).
+4. Detect framework from run_cmd if not already known.
 
 Return the collected context.`,
   { schema: CONTEXT_SCHEMA, label: 'collect-context', phase: 'Setup' }
@@ -66,90 +112,188 @@ Return the collected context.`,
 const setup = await agent(
   `You are the baseline-verification step of a mutation testing workflow.
 
-Context:
-- run_cmd: ${ctx.run_cmd}
-- work_dir: ${ctx.work_dir}
-- framework: ${ctx.framework}
+Context: run_cmd="${ctx.run_cmd}", work_dir="${ctx.work_dir}", framework="${ctx.framework}"
 
 Steps — use mcp__test-mutation__ tools:
 1. Call verify_baseline(run_cmd="${ctx.run_cmd}", framework="${ctx.framework}")
-   → If success=false, report the failure message and stop with an error.
+   → If success=false, stop with an error.
 2. Call enumerate_tests(run_cmd="${ctx.run_cmd}", framework="${ctx.framework}")
-   → If the list is empty on a non-pytest project, read test files directly for test names
-     (look for def test_, it(, test(, describe( patterns) and use those names.
+   → If empty on a non-pytest project, read test files for names (def test_, it(, test(, describe()).
 3. Call init_work_dir(work_dir="${ctx.work_dir}", test_names=[...all test names...])
-4. Return the full list of test IDs, detected framework, and count.`,
+4. Return full test list, detected framework, and count.`,
   { schema: SETUP_SCHEMA, label: 'baseline-and-enumerate', phase: 'Setup' }
 )
 
-log(`Found ${setup.count} tests. Running mutation phase sequentially (shared source files)...`)
+log(`Found ${setup.count} tests. Running mutation phase...`)
 
-// Phase 2: Mutate
-// Must run serially — each agent applies then reverts a source mutation.
-// Two concurrent agents would conflict on the same files.
+// ── Phase 2: Mutate ───────────────────────────────────────────────────────────
+//
+// The apply → save → run → revert sequence is split into separate awaited agent
+// calls so the workflow guarantees the revert always runs, regardless of what
+// the LLM does inside any individual step. Outcome decisions are pure JS.
+//
+// Tests run serially: mutations modify shared source files, so parallelism would
+// cause conflicts.
+
 phase('Mutate')
 
 const results = []
+
 for (let i = 0; i < setup.tests.length; i++) {
-  const test = setup.tests[i]
-  const testId = `test-${String(i + 1).padStart(3, '0')}`
+  const test    = setup.tests[i]
+  const testId  = `test-${String(i + 1).padStart(3, '0')}`
+  const wdArg   = `work_dir="${ctx.work_dir}", test_id="${testId}"`
+  const runArgs = `${wdArg}, run_cmd="${ctx.run_cmd}", framework="${ctx.framework}"`
 
-  const result = await agent(
-    `You are finding a targeted mutation for one specific test.
+  let finalOutcome = null
+  let finalDesc    = ''
+  let attempts     = 0
+  const failureLog = []  // [{failed_tests}, ...] per attempt, for diagnosis
 
-Target test: "${test}"
-Test slot: ${testId}
-work_dir: ${ctx.work_dir}
-run_cmd: ${ctx.run_cmd}
-framework: ${ctx.framework}
-source_root: ${ctx.source_root}
+  // ── Attempt loop ──────────────────────────────────────────────────────────
+  while (finalOutcome === null && attempts < 5) {
 
-## Goal
-Find a minimal source code change that makes ONLY "${test}" fail while all other tests pass.
+    // STEP 1 — LLM: generate a mutation candidate
+    const candidate = await agent(
+      `Generate a minimal mutation to break test "${test}" without breaking any other test.
+Source root: ${ctx.source_root}. Attempt ${attempts + 1} of 5.
 
-## Algorithm — up to 5 attempts
+Read the test source. Identify the function it exercises and the assertion it makes.
+Propose a mutation: flip a comparison (> → >=), negate a condition, change a return
+constant, remove a side-effect statement, or change an arithmetic operator.
+FORBIDDEN: delete whole functions, change signatures, test-input-specific special-casing.
 
-For each attempt:
+Return file_path (relative), old_str (exact verbatim text to replace), new_str, reasoning.`,
+      { schema: CANDIDATE_SCHEMA, label: `${testId}:gen-${attempts + 1}`, phase: 'Mutate' }
+    )
 
-**a. Understand the test** — Read the test source. Identify: what function does it exercise? what assertion does it make?
+    // STEP 2 — apply mutation (deterministic MCP call)
+    const applied = await agent(
+      `Call mcp__test-mutation__apply_mutation with exactly these arguments:
+  file_path: "${candidate.file_path}"
+  old_str: the exact string from the candidate (copy verbatim — do not paraphrase)
+  new_str: the replacement string from the candidate
+Return the result object {success, error}.`,
+      { schema: APPLY_SCHEMA, label: `${testId}:apply-${attempts + 1}`, phase: 'Mutate' }
+    )
 
-**b. Generate a mutation** — a minimal change that breaks this test without affecting others:
-   - Flip a comparison: > → >=, == → !=
-   - Negate a condition: if x → if not x
-   - Change a return constant: return True → return False
-   - Remove a single side-effect statement
-   - Change an arithmetic operator: + → -
-   FORBIDDEN: deleting whole functions, changing signatures, test-input-specific special-casing.
+    if (!applied || !applied.success) {
+      // old_str not found verbatim — don't count as an attempt, loop back for a new candidate
+      log(`${testId} attempt ${attempts + 1}: apply failed (old_str mismatch), regenerating...`)
+      continue
+    }
 
-**c. Apply → run → revert** — always in this order, never skip the revert:
-   apply_mutation(file_path, old_str, new_str)
-     → if success=false: the old_str wasn't found verbatim — fix it and retry WITHOUT counting the attempt
-   save_patch("${ctx.work_dir}", "${testId}")
-   run_suite("${ctx.work_dir}", "${testId}", "${ctx.run_cmd}", "${ctx.framework}")
-   revert_file(file_path)   ← ALWAYS call this, even after a successful outcome
+    // STEP 3 — save patch + run suite
+    const runResult = await agent(
+      `Call mcp__test-mutation__save_patch(${wdArg}).
+Then call mcp__test-mutation__run_suite(${runArgs}).
+Return the run_suite result: {exit_code, failed_tests, output_tail}.`,
+      { schema: RUN_SCHEMA, label: `${testId}:run-${attempts + 1}`, phase: 'Mutate' }
+    )
 
-**d. Decide from run_suite result:**
-   - failed_tests == ["${test}"] only → SUCCESS → write_outcome(..., "OK", description) and return
-   - "${test}" not in failed_tests → mutation missed → new attempt
-   - "${test}" in failed_tests AND others also failed → too broad → narrower mutation
+    // STEP 4 — revert (GUARANTEED: always reached because it is a separate await)
+    await agent(
+      `Call mcp__test-mutation__revert_file(file_path="${candidate.file_path}").
+This must be called unconditionally to restore the source file.`,
+      { schema: REVERT_SCHEMA, label: `${testId}:revert-${attempts + 1}`, phase: 'Mutate' }
+    )
 
-## After 5 failed attempts — diagnose
+    attempts++
 
-Look at which tests co-failed most consistently across the attempts. Pick the most common sibling. Apply a mutation targeting ONLY that sibling. Run suite.
-- Sibling fails, "${test}" stays green → BASELINE
-- Both always fail together → COUPLED
-- No stable co-failure pattern, or target never fails → SUSPECT
+    // STEP 5 — outcome decision (pure JS, no LLM)
+    const failed = runResult ? (runResult.failed_tests || []) : []
+    failureLog.push(failed)
 
-Call: write_outcome("${ctx.work_dir}", "${testId}", outcome, description, siblings="NNN NNN")
-Return the final outcome.`,
-    { schema: MUTATION_SCHEMA, label: `mutate:${testId}`, phase: 'Mutate' }
+    if (failed.length === 1 && failed[0] === test) {
+      finalOutcome = 'OK'
+      finalDesc    = candidate.reasoning || `\`${candidate.old_str}\` → \`${candidate.new_str}\` in ${candidate.file_path}`
+    }
+    // else: mutation missed or too broad → loop continues
+  }
+
+  // ── Diagnosis (only if all 5 attempts failed) ─────────────────────────────
+  if (finalOutcome === null) {
+
+    // Find the most consistently co-failing sibling (pure JS)
+    const counts = {}
+    for (const failed of failureLog) {
+      for (const t of failed) {
+        if (t !== test) counts[t] = (counts[t] || 0) + 1
+      }
+    }
+    const topSibling = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0]
+
+    if (topSibling) {
+      // LLM: generate a mutation targeting only the sibling
+      const sibCandidate = await agent(
+        `Generate a minimal mutation targeting ONLY "${topSibling}", NOT "${test}".
+Same mutation rules as before. Source root: ${ctx.source_root}.
+Return file_path, old_str, new_str, reasoning, and set sibling_test="${topSibling}".`,
+        { schema: SIBLING_SCHEMA, label: `${testId}:diag-gen`, phase: 'Mutate' }
+      )
+
+      // Deterministic: apply → run → revert for the sibling probe
+      const sibApplied = await agent(
+        `Call mcp__test-mutation__apply_mutation(file_path="${sibCandidate.file_path}", old_str=..., new_str=...).
+Use the exact strings from the sibling candidate.`,
+        { schema: APPLY_SCHEMA, label: `${testId}:diag-apply`, phase: 'Mutate' }
+      )
+
+      let diagFailed = null
+      if (sibApplied && sibApplied.success) {
+        const diagRun = await agent(
+          `Call mcp__test-mutation__save_patch(${wdArg}).
+Then call mcp__test-mutation__run_suite(${runArgs}).
+Return {exit_code, failed_tests, output_tail}.`,
+          { schema: RUN_SCHEMA, label: `${testId}:diag-run`, phase: 'Mutate' }
+        )
+
+        // GUARANTEED revert
+        await agent(
+          `Call mcp__test-mutation__revert_file(file_path="${sibCandidate.file_path}").`,
+          { schema: REVERT_SCHEMA, label: `${testId}:diag-revert`, phase: 'Mutate' }
+        )
+
+        diagFailed = diagRun ? (diagRun.failed_tests || []) : []
+      }
+
+      // Deterministic diagnosis decision (pure JS)
+      if (diagFailed !== null) {
+        const sibFails    = diagFailed.includes(topSibling)
+        const targetFails = diagFailed.includes(test)
+        if (sibFails && !targetFails) {
+          finalOutcome = 'BASELINE'
+          finalDesc    = `${test} covers the minimal path; ${topSibling} has independent coverage`
+        } else if (sibFails && targetFails) {
+          finalOutcome = 'COUPLED'
+          finalDesc    = `${test} and ${topSibling} are entangled — always fail together`
+        } else {
+          finalOutcome = 'SUSPECT'
+          finalDesc    = `No stable co-failure pattern after probing sibling ${topSibling}`
+        }
+      } else {
+        finalOutcome = 'SUSPECT'
+        finalDesc    = `Could not apply sibling mutation for diagnosis`
+      }
+    } else {
+      finalOutcome = 'SUSPECT'
+      finalDesc    = `Target test never failed across all ${attempts} mutation attempts`
+    }
+  }
+
+  // Write outcome (deterministic MCP call)
+  await agent(
+    `Call mcp__test-mutation__write_outcome(work_dir="${ctx.work_dir}", test_id="${testId}", outcome="${finalOutcome}", description=<the mutation description below>).
+Description: ${finalDesc}`,
+    { label: `${testId}:write`, phase: 'Mutate' }
   )
 
-  results.push(result)
-  log(`${testId} done: ${result ? result.outcome : 'null'} — ${setup.count - i - 1} remaining`)
+  results.push({ test, testId, outcome: finalOutcome })
+  log(`${testId} → ${finalOutcome} (${setup.count - i - 1} remaining)`)
 }
 
-// Phase 3: Report
+// ── Phase 3: Report ───────────────────────────────────────────────────────────
+
 phase('Report')
 
 const report = await agent(
@@ -157,10 +301,11 @@ const report = await agent(
 
 work_dir: ${ctx.work_dir}
 run_cmd: ${ctx.run_cmd}
+outcomes: ${JSON.stringify(results)}
 
 Steps:
-1. Call build_report("${ctx.work_dir}") to assemble the mutation-report.md markdown table.
-2. Count outcomes from the returned data and prepend this header to mutation-report.md:
+1. Call mcp__test-mutation__build_report(work_dir="${ctx.work_dir}") to assemble the markdown table.
+2. Count outcomes from the results above and prepend this header to mutation-report.md:
    ## Mutation Testing Report
    **Command**: \`${ctx.run_cmd}\`
    **Results**: N meaningful (OK) / N BASELINE / N COUPLED / N SUSPECT
@@ -168,8 +313,8 @@ Steps:
    - Functions/methods with no test calling them
    - Branches no test reaches (else arms, early-return guards, exception handlers)
    - Input conditions no test exercises (empty, None, negative, etc.)
-   Write ALL gaps to untested-areas.md (not just the top 5).
-4. Return the full report_markdown string and a brief summary of the top 5 gaps.`,
+   Write ALL gaps to untested-areas.md.
+4. Return the full report_markdown and a summary of the top 5 gaps.`,
   { label: 'build-report', phase: 'Report' }
 )
 
