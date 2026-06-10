@@ -88,6 +88,8 @@ untested-areas.md        ← written by AI with Write tool
 | Script | Purpose |
 |--------|---------|
 | `mutation-workflow.js` | Deterministic Workflow-tool orchestrator: baseline → per-test agents → coverage → report |
+| `trial-mutation.sh` | One deterministic mutation trial: patch capture → suite run → verdict classification → revert → green re-verify, in a single call |
+| `record-outcome.sh` | Write outcome.txt / mutation-desc.txt / siblings.txt / role.txt (incl. sibling role files) in one validated call |
 | `init-work-dir.sh` | Create `test-NNN/` dirs and write `name.txt` from `test-names.txt` |
 | `make-patch.sh` | Capture `git diff` of current edit into a patch file |
 | `run-cmd.sh` | Run any shell command, capture log, print tail + exit code |

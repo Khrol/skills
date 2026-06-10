@@ -17,6 +17,9 @@ export const meta = {
 //   runAllCmd   shell command that runs the full test subset
 //   tests       array of test identifiers, in order (test-001 = tests[0])
 //   notes       optional framework notes (e.g. sbt client usage) appended to prompts
+//   failGrep    optional grep -E pattern selecting failure lines in the suite log
+//               (trial-mutation.sh default '^FAILED' fits pytest)
+//   failField   optional awk field of the test id on those lines (default 2)
 // ---------------------------------------------------------------------------
 
 // Tolerate a JSON-encoded args string (the Workflow tool expects a real object).
@@ -107,13 +110,23 @@ const priorSummary = (outcomes) => {
     .join('\n')
 }
 
-const perTestPrompt = (num, name, outcomes) => `${ctx}
+const numberedTests = () => cfg.tests.map((t, i) => `- test-${pad(i + 1)}: \`${t}\``).join('\n')
+
+const perTestPrompt = (num, name, outcomes) => {
+  const trialCmd = (targetId) =>
+    `bash "${cfg.skillDir}/scripts/trial-mutation.sh" "${workDir}" ${num} "${targetId}" "${cfg.runAllCmd}"` +
+    (cfg.failGrep ? ` "${cfg.failGrep}" "${cfg.failField || 2}"` : '')
+  const recordCmd = `bash "${cfg.skillDir}/scripts/record-outcome.sh" "${workDir}" ${num}`
+  return `${ctx}
 ## Your task: find a targeted mutation for test-${num}
 
 Test identifier: \`${name}\`
 Your work directory: ${workDir}/test-${num}/ (already exists, name.txt already written).
 
 Find a minimal production-code change that makes EXACTLY this one test fail while every other test stays green.
+
+### Fixed test numbering (for sibling references)
+${numberedTests()}
 
 ### Results from tests already processed (use this — do not rediscover it)
 ${priorSummary(outcomes)}
@@ -122,33 +135,37 @@ ${priorSummary(outcomes)}
 - Do not reuse a mutation line already consumed by an earlier OK test if both tests share that code path.
 
 ### Procedure
+Your only creative decision is WHICH mutation to apply. Everything mechanical — patch capture, suite run, failure classification, revert, green re-verification — is one harness script call. NEVER run the test suite, git diff, or git restore yourself, and never write outcome files with the Write tool; the scripts do all of it in a fixed order.
+
 1. Read the test code for \`${name}\`. Identify the production function/branch it exercises and the assertion it makes.
-2. Up to 5 attempts. Per attempt:
+2. Up to 5 attempts. Each attempt is exactly two actions:
    a. Apply ONE minimal mutation to production source with the Edit tool. Good mutations: flip a comparison (\`>\` → \`>=\`), change a returned constant, negate a condition, remove one side-effect statement, swap an arithmetic operator. Forbidden: deleting whole functions, changing signatures, modifying test files, and input-specific special-casing (\`if x == <test-input>: return wrong\`) — mutations must change general logic.
-   b. Capture the patch: \`bash "${cfg.skillDir}/scripts/make-patch.sh" "${workDir}/test-${num}/mutation.patch"\`
-   c. Run the suite: \`bash "${cfg.skillDir}/scripts/run-cmd.sh" "${workDir}/test-${num}/suite.log" "<run-all command>"\` — read the printed tail + exit_code directly; do not cat the log.
-   d. Classify: only \`${name}\` failed → success. Target did not fail → revert, try a different mutation. Target + others failed → revert, note WHICH others co-failed (you need this for diagnosis), try a narrower mutation.
-   e. Revert (standalone command, never chained): \`git restore <mutated-file>\`
-3. After every attempt (success or failure) the working tree must be back to pristine. After your final attempt, verify: \`bash "${cfg.skillDir}/scripts/run-cmd.sh" "${workDir}/test-${num}/verify.log" "<run-all command>"\` must print exit_code=0.
+   b. Run the trial harness (it captures the patch, runs the suite, classifies, reverts, and re-verifies green — all in one call):
+      \`${trialCmd(name)}\`
+   Then act on the printed \`verdict=\` mechanically:
+   - \`TARGET_ONLY\` → success → step 3.
+   - \`TARGET_NOT_FAILED\` → mutation invisible to the target; try a different mutation.
+   - \`TARGET_PLUS_OTHERS\` → too broad; note the \`others=\` test ids (needed for step 4), try a narrower mutation.
+   - \`OTHERS_ONLY\` → you mutated a path the target does not exercise; re-read the test, mutate what it actually calls.
+   - \`NO_MUTATION\` → your edit changed no tracked file; re-apply it.
+   - \`SUITE_ERROR\` → the mutation broke compilation/collection; pick a syntactically valid mutation.
+   - If the output ever shows \`green_after=no\`: STOP immediately and return suiteGreenAfter=false — do not attempt repairs.
+3. On success, record the outcome with one call (single-quote the description):
+   \`${recordCmd} OK '<desc>'\`
+   where <desc> is one-line markdown like \`\` \`- x > 0\`<br>\`+ x >= 0\` in \`Parser.py:42\` \`\`
+4. After 5 failed attempts — diagnose before giving up. From your \`others=\` lists, pick the consistently co-failing sibling test. Apply ONE mutation targeting that sibling's distinctive behaviour (Edit tool), then run the SAME trial harness but with the sibling's test id as the target:
+   \`${trialCmd('<sibling-test-id>')}\`
+   Map the verdict mechanically (sibling numbers come from the fixed numbering above):
+   - \`TARGET_ONLY\` (sibling broke alone, \`${name}\` stayed green) → **BASELINE**: \`${name}\` is the root of the group; the siblings extend its shared path.
+     \`${recordCmd} BASELINE 'root: shared path extended by test-MMM, test-PPP — siblings can each be broken individually' MMM PPP\`
+     (record-outcome.sh writes role.txt=root here and "sibling of test-${num}" into each sibling's directory automatically.)
+   - \`TARGET_PLUS_OTHERS\` with \`${name}\` among \`others=\` → **COUPLED** (bidirectional entanglement, a code smell):
+     \`${recordCmd} COUPLED 'entangled with test-MMM: neither can be broken without failing the other' MMM\`
+   - Anything else (target never failed under any mutation, or no stable co-failure group) → **SUSPECT**:
+     \`${recordCmd} SUSPECT 'no targeted mutation found in 5 attempts'\`
 
-### On success (write with the Write tool, separate calls, never chained with bash)
-- ${workDir}/test-${num}/outcome.txt → \`OK\`
-- ${workDir}/test-${num}/mutation-desc.txt → one-line markdown like \`\` \`- x > 0\`<br>\`+ x >= 0\` in \`Parser.scala:42\` \`\`
-
-### After 5 failed attempts — diagnose before giving up
-Identify the consistently co-failing sibling tests from your attempts. Apply ONE mutation targeting a sibling's distinctive behaviour and run the suite: does the sibling fail while \`${name}\` stays green?
-- Sibling CAN fail alone → **BASELINE** (one-way dependency; \`${name}\` is the root of the group, covering the shared path the siblings extend). Write:
-  - outcome.txt → \`BASELINE\`
-  - role.txt → \`root\`
-  - siblings.txt → space-separated peer numbers, e.g. \`002 005\`
-  - mutation-desc.txt → \`root: shared path extended by test-002, test-005 — siblings can each be broken individually\`
-  - for EACH sibling: ${workDir}/test-MMM/role.txt → \`sibling of test-${num}\` (write it even if that sibling is not processed yet)
-- Sibling CANNOT fail without \`${name}\` also failing → **COUPLED** (bidirectional entanglement, a code smell). Write outcome.txt → \`COUPLED\`, siblings.txt, and mutation-desc.txt like \`entangled with test-002: neither can be broken without failing the other\`.
-- Target never failed under any mutation, or no stable co-failure group → **SUSPECT**. Write outcome.txt → \`SUSPECT\` and mutation-desc.txt → \`no targeted mutation found in 5 attempts\`.
-Revert the diagnostic mutation and re-verify green afterwards.
-
-Sibling numbers refer to this fixed numbering: ${outcomes.length ? 'see list above plus the remaining tests in order' : 'tests are numbered 001.. in the given order'}.
-Return the structured output exactly per schema. suiteGreenAfter must reflect a real verification run, not an assumption.`
+Return the structured output exactly per schema. suiteGreenAfter must mirror the LAST \`green_after=\` value the harness printed, not an assumption.`
+}
 
 const recoveryPrompt = (num, name) => `${ctx}
 ## Recovery after test-${num} (\`${name}\`)

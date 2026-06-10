@@ -93,7 +93,9 @@ Workflow({
     workDir: "mutation-work",
     runAllCmd: "<run-all command from Step 1>",
     tests: ["<test id 1>", "<test id 2>", ...],   // exact order shown to the user in Step 3
-    notes: "<optional framework notes, e.g. sbt client command quirks>"
+    notes: "<optional framework notes, e.g. sbt client command quirks>",
+    failGrep: "<optional grep -E pattern for failure lines in the suite log; default '^FAILED' fits pytest>",
+    failField: "<optional awk field of the test id on those lines; default 2>"
   }
 })
 ```
