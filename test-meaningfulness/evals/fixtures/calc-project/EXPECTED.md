@@ -10,6 +10,20 @@ read it (the eval prompt says to ignore it).
 | `test_discount_vacuous` | SUSPECT | Swallows all exceptions and asserts a tautology; no source mutation can fail it. |
 | `test_format_price` | COUPLED (sibling: `test_format_price_dup`) | Identical assertion on `format_price(3)`; any mutation breaking one breaks both. |
 | `test_format_price_dup` | COUPLED (sibling: `test_format_price`) | Same as above, mirrored. |
+| `test_normalize_identity` | BASELINE, marked **root** (siblings: `test_normalize_strips`, `test_normalize_lowercases`) | `"abc"` is a fixed point of both `strip` and `lower`; any general mutation that changes `normalize("abc")` also changes the siblings' outputs (all expect `"abc"`), so the root can never fail alone. |
+| `test_normalize_strips` | OK, marked **sibling of `test_normalize_identity`** | Dropping `.strip()` (e.g. `return text.lower()`) fails only this test. |
+| `test_normalize_lowercases` | OK, marked **sibling of `test_normalize_identity`** | Dropping `.lower()` (e.g. `return text.strip()`) fails only this test. |
+
+## BASELINE root/sibling marking (required)
+
+The report must make the baseline group structure explicit:
+
+- The root test (`test_normalize_identity`) is marked as the **root** of its
+  baseline group — not merely labelled BASELINE.
+- Each sibling (`test_normalize_strips`, `test_normalize_lowercases`) is
+  marked as a **sibling of the concrete root** — the root test must be
+  identifiable from the sibling's row (by test name or test number), not
+  just a generic "baseline sibling" label.
 
 ## Coverage gaps the skill should report
 
@@ -23,4 +37,4 @@ read it (the eval prompt says to ignore it).
 
 - After the run, every file under `calc/` and `tests/` is byte-identical to
   this fixture (all mutations reverted).
-- The full suite (5 tests) passes at the end of the run.
+- The full suite (8 tests) passes at the end of the run.

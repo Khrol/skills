@@ -4,17 +4,20 @@
     {
       "id": 1,
       "prompt": "Evaluate the meaningfulness of the unit tests in this project. It is a plain pytest project; run the tests with `python -m pytest`. Ignore EXPECTED.md — it is not part of the project under evaluation.",
-      "expected_output": "mutation-report.md classifying each of the 5 tests per the fixture's engineered ground truth (test_add OK, test_clamp_upper OK, test_discount_vacuous SUSPECT, test_format_price and test_format_price_dup COUPLED with each other), plus untested-areas.md listing safe_div. The fixture sources are left unmodified and the suite is green at the end.",
+      "expected_output": "mutation-report.md classifying each of the 8 tests per the fixture's engineered ground truth (test_add OK, test_clamp_upper OK, test_discount_vacuous SUSPECT, test_format_price and test_format_price_dup COUPLED with each other, test_normalize_identity BASELINE explicitly marked as the root of its group, test_normalize_strips and test_normalize_lowercases OK and each explicitly marked as a sibling of test_normalize_identity), plus untested-areas.md listing safe_div. The fixture sources are left unmodified and the suite is green at the end.",
       "files": ["evals/fixtures/calc-project"],
       "expectations": [
-        "mutation-report.md exists and contains exactly one row per test in the fixture suite (5 tests: test_add, test_clamp_upper, test_discount_vacuous, test_format_price, test_format_price_dup)",
+        "mutation-report.md exists and contains exactly one row per test in the fixture suite (8 tests: test_add, test_clamp_upper, test_discount_vacuous, test_format_price, test_format_price_dup, test_normalize_identity, test_normalize_strips, test_normalize_lowercases)",
         "test_add is classified OK with a non-empty mutation patch that modifies calc/core.py",
         "test_clamp_upper is classified OK",
         "test_discount_vacuous is classified SUSPECT",
         "test_format_price and test_format_price_dup are classified COUPLED, each listing the other as its sibling",
+        "test_normalize_identity is classified BASELINE and its report row explicitly marks it as the root of its baseline group",
+        "test_normalize_strips is classified OK and its report row explicitly marks it as a sibling of test_normalize_identity (the concrete root is identifiable by test name or number)",
+        "test_normalize_lowercases is classified OK and its report row explicitly marks it as a sibling of test_normalize_identity (the concrete root is identifiable by test name or number)",
         "untested-areas.md (or the report's coverage-gap section) mentions safe_div",
         "after the run, all files under calc/ and tests/ are byte-identical to the original fixture (every mutation was reverted)",
-        "the full test suite (5 tests) passes at the end of the run"
+        "the full test suite (8 tests) passes at the end of the run"
       ]
     }
   ]

@@ -10,7 +10,7 @@ flowchart LR
     M --> R{Which tests\nnow fail?}
 
     R -->|only this one| OK["✓ MEANINGFUL\ntest catches real bugs"]
-    R -->|this + siblings\nbut siblings isolable| BL["BASELINE\nhealthy shared path\ntest covers the minimum"]
+    R -->|this + siblings\nbut siblings isolable| BL["BASELINE\nthis test is the root\nsiblings extend it"]
     R -->|this + siblings\nmutually entangled| CO["COUPLED\nredundant tests\nmissing separation"]
     R -->|none — test\nnever fails| SU["SUSPECT\nvacuous assertion\nor wrong target"]
 
@@ -56,6 +56,7 @@ mutation-work/
     suite.log            ← from run-cmd.sh
     outcome.txt          ← OK | BASELINE | COUPLED | SUSPECT
     siblings.txt         ← (BASELINE/COUPLED only)
+    role.txt             ← (BASELINE groups only) "root" | "sibling of test-NNN"
   test-002/
     ...
 mutation-report.md       ← from build-report.sh

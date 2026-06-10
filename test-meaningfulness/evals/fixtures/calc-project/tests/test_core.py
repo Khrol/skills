@@ -1,4 +1,4 @@
-from calc.core import add, clamp, discount, format_price
+from calc.core import add, clamp, discount, format_price, normalize
 
 
 def test_add():
@@ -24,3 +24,15 @@ def test_format_price():
 
 def test_format_price_dup():
     assert format_price(3) == "$3.00"
+
+
+def test_normalize_identity():
+    assert normalize("abc") == "abc"
+
+
+def test_normalize_strips():
+    assert normalize("  abc  ") == "abc"
+
+
+def test_normalize_lowercases():
+    assert normalize("ABC") == "abc"

@@ -18,6 +18,10 @@ def format_price(amount):
     return f"${amount:.2f}"
 
 
+def normalize(text):
+    return text.strip().lower()
+
+
 def safe_div(a, b):
     if b == 0:
         return None
