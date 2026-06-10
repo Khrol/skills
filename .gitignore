@@ -1,0 +1,4 @@
+# Transient skill-creator eval run artifacts (scratch fixture copies, grading, benchmarks)
+test-meaningfulness-workspace/
+__pycache__/
+.pytest_cache/
