@@ -22,27 +22,47 @@ flowchart LR
 
 ## Implementation flow
 
+Orchestration is deterministic: the main agent only gathers inputs (context,
+run command, test list) and then launches `scripts/mutation-workflow.js` via
+the Workflow tool. The script fixes the phase order, the per-test sequence,
+the 5-attempt limit, the revert discipline, and the recovery path — the LLM
+sub-agents only do the creative part (choosing mutations) inside that frame.
+
 ```mermaid
 flowchart LR
     A([Start]) --> B[Detect\ncontext]
-    B --> C{Green?}
-    C -->|no| X([Fix first])
-    C -->|yes| D[Enumerate\ninit-work-dir]
+    B --> D[Enumerate\ninit-work-dir]
+    D --> W[[Workflow:\nmutation-workflow.js]]
 
-    D --> E1
-
-    subgraph LOOP[" Per test · 5 attempts "]
+    subgraph W2[" Deterministic workflow "]
         direction LR
-        E1[Edit\nsource] --> E2[make-patch] --> E3[run-cmd\nsuite.log]
-        E3 --> E4{Only\ntarget?}
-        E4 -->|yes| E5[✓ Revert]
-        E4 -->|no| E6[Revert]
-        E6 -->|retry| E1
-        E6 -->|×5| E7[BASELINE\nCOUPLED\nSUSPECT]
+        C{Baseline\ngreen?}
+        C -->|no| X([Abort])
+        C -->|yes| E1
+
+        subgraph LOOP[" Per-test agent · sequential · 5 attempts "]
+            direction LR
+            E1[Edit\nsource] --> E2[make-patch] --> E3[run-cmd\nsuite.log]
+            E3 --> E4{Only\ntarget?}
+            E4 -->|yes| E5[✓ Revert]
+            E4 -->|no| E6[Revert]
+            E6 -->|retry| E1
+            E6 -->|×5| E7[BASELINE\nCOUPLED\nSUSPECT]
+        end
+
+        LOOP --> R{Tree green\nafter test?}
+        R -->|no| RC[Recovery\nagent]
+        R -->|yes| F
+        RC --> F[Coverage\ngaps]
+        F --> G[build-report]
     end
 
-    LOOP --> F[Coverage\ngaps] --> G[build-report] --> H([Done])
+    W --> W2
+    G --> H([Report shown])
 ```
+
+The Workflow tool is required: without it the skill stops and asks the user
+to upgrade Claude Code.
 
 ## Work directory
 
@@ -67,6 +87,9 @@ untested-areas.md        ← written by AI with Write tool
 
 | Script | Purpose |
 |--------|---------|
+| `mutation-workflow.js` | Deterministic Workflow-tool orchestrator: baseline → per-test agents → coverage → report |
+| `trial-mutation.sh` | One deterministic mutation trial: patch capture → suite run → verdict classification → revert → green re-verify, in a single call |
+| `record-outcome.sh` | Write outcome.txt / mutation-desc.txt / siblings.txt / role.txt (incl. sibling role files) in one validated call |
 | `init-work-dir.sh` | Create `test-NNN/` dirs and write `name.txt` from `test-names.txt` |
 | `make-patch.sh` | Capture `git diff` of current edit into a patch file |
 | `run-cmd.sh` | Run any shell command, capture log, print tail + exit code |
