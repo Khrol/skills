@@ -55,16 +55,17 @@ mutation-work/
     suite.log            # stdout+stderr of the run-all command
     outcome.txt          # OK | BASELINE | COUPLED | SUSPECT
     siblings.txt         # (BASELINE/COUPLED only) space-separated peer test numbers
+    role.txt             # (BASELINE groups only) "root" on the root test; "sibling of test-NNN" on each sibling
   test-002/
     ...
 ```
 
-**You write**: `name.txt`, `mutation.patch`, `mutation-desc.txt`, `outcome.txt`, `siblings.txt`.
+**You write**: `name.txt`, `mutation.patch`, `mutation-desc.txt`, `outcome.txt`, `siblings.txt`, `role.txt`.
 **Scripts write**: `suite.log` (via redirected test runner output).
 
 `mutation-desc.txt` format:
 - OK: `` `- old line`<br>`+ new line` in `File.scala:42` ``
-- BASELINE: `shared path with test-003, test-007: siblings can each be broken individually`
+- BASELINE: `root: shared path extended by test-003, test-007 — siblings can each be broken individually`
 - COUPLED: `entangled with test-003: neither can be broken without failing the other`
 - SUSPECT: `no targeted mutation found in 5 attempts`
 
@@ -199,12 +200,14 @@ Revert any applied changes. Then check directionality:
 
 **Pick one consistently co-failing sibling test. Apply a mutation targeting that sibling. Run the full suite: does the sibling fail while the target stays green?**
 
-**BASELINE** — sibling CAN be broken without breaking the target (one-way dependency). Normal healthy pattern: target covers the minimal path; siblings extend it.
+**BASELINE** — sibling CAN be broken without breaking the target (one-way dependency). Normal healthy pattern: the target is the **root** of the group — it covers the minimal shared path; the siblings extend it. The report must make this structure explicit: the root is marked `root`, and every sibling is marked as a sibling of that concrete root.
 
-Write these files with the Write tool — three separate Write calls, never combined with bash:
+Write these files with the Write tool — separate Write calls, never combined with bash:
 - `mutation-work/test-NNN/outcome.txt` — `BASELINE`
+- `mutation-work/test-NNN/role.txt` — `root`
 - `mutation-work/test-NNN/siblings.txt` — space-separated peer test numbers, e.g. `002 005`
-- `mutation-work/test-NNN/mutation-desc.txt` — e.g. `shared path with test-002, test-005: siblings can each be broken individually`
+- `mutation-work/test-NNN/mutation-desc.txt` — e.g. `root: shared path extended by test-002, test-005 — siblings can each be broken individually`
+- for EACH sibling in the group: `mutation-work/test-MMM/role.txt` — `sibling of test-NNN` (NNN = the root's number). Write these regardless of whether the sibling has been processed yet — the role marks group membership and does not change the sibling's own outcome.
 
 **COUPLED** — sibling CANNOT be broken without also breaking the target (bidirectional entanglement). Code smell.
 

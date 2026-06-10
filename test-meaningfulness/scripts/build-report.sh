@@ -12,11 +12,20 @@ while IFS= read -r dir; do
   name=$(cat "$dir/name.txt"          2>/dev/null || echo "unknown")
   outcome=$(cat "$dir/outcome.txt"    2>/dev/null || echo "?")
   desc=$(cat "$dir/mutation-desc.txt" 2>/dev/null || echo "—")
+  role=$(cat "$dir/role.txt"          2>/dev/null || echo "")
 
   case "$outcome" in
     OK)   result="Only \`$name\` failed ✓" ;;
     *)    result="**${outcome}**" ;;
   esac
+
+  # BASELINE group marking: the root is tagged explicitly; every sibling
+  # row names its concrete root so the group structure is visible.
+  if [ "$role" = "root" ]; then
+    result="**${outcome} (root)**"
+  elif [ -n "$role" ]; then
+    result="$result — $role"
+  fi
 
   printf "| %s | \`%s\` | %s | %s |\n" "$num" "$name" "$desc" "$result"
 done < <(find "$WORK_DIR" -maxdepth 1 -name 'test-*' -type d | sort -V)
